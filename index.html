@@ -440,12 +440,12 @@ function roadTexture(div,per,ramp,one){
 const roadMats=new Map();
 function roadMat(e){const c=laneCfg(e);const key=c.div+':'+c.per+':'+!!c.ramp+':'+!!c.one;let m=roadMats.get(key);if(!m){m=new THREE.MeshLambertMaterial({map:roadTexture(c.div,c.per,c.ramp,c.one),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});roadMats.set(key,m);}return m;}
 const railMat=new THREE.MeshLambertMaterial({color:0xc9ced1,side:THREE.DoubleSide});
-const wallMat=new THREE.MeshLambertMaterial({color:0xa7a49c,side:THREE.DoubleSide});
+const wallMat=new THREE.MeshLambertMaterial({color:0xb3b1aa,side:THREE.DoubleSide});
 const medMat=new THREE.MeshLambertMaterial({color:0x9ea3a1,side:THREE.DoubleSide});
 const poleMat=new THREE.MeshLambertMaterial({color:0x6e7478});
 const lampMat=new THREE.MeshBasicMaterial({color:0x333333});
 const reflMat=new THREE.MeshBasicMaterial({color:0x554422});
-const kpMat=new THREE.MeshLambertMaterial({color:0xe8ece8}); const kplMat=new THREE.MeshLambertMaterial({color:0x1d6b48});
+const kpMat=new THREE.MeshLambertMaterial({color:0xe8ece8}); const finMat=new THREE.MeshLambertMaterial({color:0x5f7a66}); const kplMat=new THREE.MeshLambertMaterial({color:0x1d6b48});
 const signPlane=new THREE.PlaneGeometry(5.8,2.7); const signBackMat=new THREE.MeshLambertMaterial({color:0x7c8288});
 const signMats=new Map();
 function signMat(j,D){ const base=j.name.replace(/(スマートIC|SIC|IC|JCT|SA|PA)$/,''); const kind=j.type===3?'JCT':j.type===2?'スマートIC':j.type===4?(j.name.endsWith('PA')?'PA':j.name.endsWith('SA')?'SA':''):'IC';
@@ -473,7 +473,7 @@ function buildChunk(e,ci){
   if(REAL){ let a0=1e9,a1=-1e9,b0=1e9,b1=-1e9; for(let i=i0;i<=i1;i++){a0=Math.min(a0,P.lon[i]);a1=Math.max(a1,P.lon[i]);b0=Math.min(b0,P.lat[i]);b1=Math.max(b1,P.lat[i]);}
     if(!ensureDem(a0-0.004,b0-0.004,a1+0.004,b1+0.004)) return null; }
   const hw=halfWidth(e), c=laneCfg(e), urban=e.typ===5||e.typ===10, eps=0.02*(e.i%4);
-  const kp=[],kIdx=[],kpl=[],kplIdx=[]; const surf=[],uv=[],sIdx=[]; const rail=[],rIdx=[]; const med=[],mIdx=[]; const poles=[],pIdx=[]; const lamps=[],lIdx=[]; const refl=[],fIdx=[];
+  const fins=[],finIdx=[]; const kp=[],kIdx=[],kpl=[],kplIdx=[]; const surf=[],uv=[],sIdx=[]; const rail=[],rIdx=[]; const med=[],mIdx=[]; const poles=[],pIdx=[]; const lamps=[],lIdx=[]; const refl=[],fIdx=[];
   let prev=null; const n=i1-i0+1;
   const L=[],R=[],Y=[],NX=[],NZ=[],X=[],Z=[],S=[],G=[];
   for(let i=i0;i<=i1;i++){
@@ -490,10 +490,12 @@ function buildChunk(e,ci){
     if(j<n-1){const a=j*2;sIdx.push(a,a+1,a+2,a+1,a+3,a+2);}
   }
   // rails / walls
-  const rh=urban?1.15:0.8, off=hw+0.2;
+  // concrete parapet (about 1 m) on viaducts, steel guardrail with posts on the ground
+  const off=hw+0.2; let elevN=0; if(REAL) for(let j=0;j<n;j++) if(Y[j]-G[j]>4) elevN++;
+  const deck=REAL?elevN>n*0.5:urban; const railLo=deck?0:0.42, railHi=deck?1.0:0.78;
   for(const side of[1,-1]){
     const base=rail.length/3;
-    for(let j=0;j<n;j++){const oo=off+(side>0?EXL[j]:EXR[j]);const x=X[j]+NX[j]*oo*side,z=Z[j]+NZ[j]*oo*side;rail.push(x,Y[j]+(urban?0:0.35),z,x,Y[j]+rh,z);if(j<n-1){const a=base+j*2;rIdx.push(a,a+2,a+1,a+1,a+2,a+3);}}
+    for(let j=0;j<n;j++){const oo=off+(side>0?EXL[j]:EXR[j]);const x=X[j]+NX[j]*oo*side,z=Z[j]+NZ[j]*oo*side;rail.push(x,Y[j]+railLo,z,x,Y[j]+railHi,z);if(j<n-1){const a=base+j*2;rIdx.push(a,a+2,a+1,a+1,a+2,a+3);}}
   }
   // median barrier
   if(c.div){for(const side of[1,-1]){const base=med.length/3;for(let j=0;j<n;j++){const x=X[j]+NX[j]*0.25*side,z=Z[j]+NZ[j]*0.25*side;med.push(x,Y[j],z,x,Y[j]+0.9,z);if(j<n-1){const a=base+j*2;mIdx.push(a,a+2,a+1,a+1,a+2,a+3);}}}
@@ -504,10 +506,17 @@ function buildChunk(e,ci){
   const spacing = urban?50:(c.div?100:0);
   if(spacing){for(let j=0;j<n;j++){ if(Math.floor(S[j]/spacing)!==Math.floor((S[j]-STEP)/spacing)&&j>0){
     const px=c.div?X[j]:X[j]+NX[j]*(hw+0.8), pz=c.div?Z[j]:Z[j]+NZ[j]*(hw+0.8);
-    box(poles,pIdx,px,Y[j],pz,0.12,10,0.12);
-    if(c.div){for(const side of[1,-1]) box(lamps,lIdx,px+NX[j]*1.4*side,Y[j]+9.8,pz+NZ[j]*1.4*side,0.5,0.18,0.25);}
-    else box(lamps,lIdx,px-NX[j]*1.4,Y[j]+9.8,pz-NZ[j]*1.4,0.5,0.18,0.25);
+    // pole with a curved arm reaching over the carriageway
+    const arm=(bx,bz,y0,dx,dz)=>{ for(let k=1;k<=4;k++) box(poles,pIdx,bx+dx*k*0.55,y0+Math.min(0.4,k*0.13),bz+dz*k*0.55,0.07,0.1,0.07); box(lamps,lIdx,bx+dx*2.4,y0+0.32,bz+dz*2.4,0.48,0.13,0.22); };
+    box(poles,pIdx,px,Y[j],pz,0.12,9.6,0.12);
+    if(c.div){ for(const side of[1,-1]) arm(px,pz,Y[j]+9.5,NX[j]*side,NZ[j]*side); }
+    else arm(px,pz,Y[j]+9.5,-NX[j],-NZ[j]);
   }}}
+  // guardrail posts every 4 m (ground sections)
+  if(!deck){ for(let j=0;j<n-1;j++){ const L=S[j+1]-S[j]; if(L<=0) continue; for(let ps=Math.ceil(S[j]/4)*4; ps<S[j+1]; ps+=4){ const f=(ps-S[j])/L;
+      for(const side of[1,-1]){ const oo=off+0.12+(side>0?EXL[j]:EXR[j]); const x=X[j]+(X[j+1]-X[j])*f+NX[j]*oo*side, z=Z[j]+(Z[j+1]-Z[j])*f+NZ[j]*oo*side; box(poles,pIdx,x,Y[j]+(Y[j+1]-Y[j])*f,z,0.06,0.8,0.06); } } } }
+  // anti-glare fins on the median barrier every 2 m
+  if(c.div){ for(let j=0;j<n-1;j++){ for(const f of [0,0.33,0.67]){ const x=X[j]+(X[j+1]-X[j])*f, z=Z[j]+(Z[j+1]-Z[j])*f, y=Y[j]+(Y[j+1]-Y[j])*f; box(fins,finIdx,x,y+0.9,z,0.05,0.75,0.05); } } }
   // delineators on rails every 40 m
   for(let j=1;j<n;j++){ if(Math.floor(S[j]/20)!==Math.floor(S[j-1]/20)){for(const side of[1,-1]){const oo=hw+0.05+(side>0?EXL[j]:EXR[j]);const x=X[j]+NX[j]*oo*side,z=Z[j]+NZ[j]*oo*side;box(refl,fIdx,x,Y[j]+0.9,z,0.1,0.16,0.1);}}}
   for(let j=1;j<n;j++){ if(Math.floor(S[j]/100)!==Math.floor(S[j-1]/100)){for(const side of[1,-1]){const oo=hw-0.6+(side>0?EXL[j]:EXR[j]);const x=X[j]+NX[j]*oo*side,z=Z[j]+NZ[j]*oo*side;box(kp,kIdx,x,Y[j],z,0.09,1.25,0.09);box(kpl,kplIdx,x,Y[j]+0.95,z,0.2,0.28,0.2);}}}
@@ -536,7 +545,7 @@ function buildChunk(e,ci){
     if(!uvs){ // make normals face up-ish for vertical strips lighting: fine as computed
     } const m=new THREE.Mesh(geo,mat);m.matrixAutoUpdate=false;m.updateMatrix();g.add(m);};
   mk(surf,sIdx,roadMat(e),uv);
-  mk(rail,rIdx,urban?wallMat:railMat);
+  mk(rail,rIdx,deck?wallMat:railMat); mk(fins,finIdx,finMat);
   mk(med,mIdx,medMat);
   mk(poles,pIdx,poleMat);
   mk(lamps,lIdx,lampMat);
