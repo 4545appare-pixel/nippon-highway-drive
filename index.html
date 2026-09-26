@@ -951,11 +951,16 @@ function nearestStation(){ let best=null,bd=6000; const tx=Math.floor(lon2x(car.
 
 /* ================= detailed mode: OpenStreetMap lanes, ramps and levels ================= */
 let MODE_OSM=false;
-const OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+const OVERPASS=['https://overpass-api.de/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
 async function fetchOSM(s,w,n,e){
   const q=`[out:json][timeout:90];way["highway"~"^(motorway|motorway_link)$"](${s.toFixed(4)},${w.toFixed(4)},${n.toFixed(4)},${e.toFixed(4)});out body geom;`;
+  const key='https://cache.local/osm/'+[s,w,n,e].map(v=>v.toFixed(3)).join('_');
+  try{ const c=await caches.open('nhd-osm'); const hit=await c.match(key); if(hit){ const age=Date.now()-(+hit.headers.get('x-t')||0); const j=await hit.json(); if(age<7*864e5&&j.elements&&j.elements.length) return j; } }catch(err){}
   let lastErr=null;
-  for(const u of OVERPASS){ try{ const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q)}); if(r.ok){ const j=await r.json(); if(j&&j.elements&&j.elements.length) return j; lastErr=new Error('empty'); } else lastErr=new Error('HTTP '+r.status); }catch(err){ lastErr=err; } }
+  for(const u of OVERPASS){ const ac=new AbortController(); const tm=setTimeout(()=>ac.abort(),40000);
+    try{ const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q),signal:ac.signal}); clearTimeout(tm);
+      if(r.ok){ const txt=await r.text(); const j=JSON.parse(txt); if(j&&j.elements&&j.elements.length){ try{ const c=await caches.open('nhd-osm'); await c.put(key,new Response(txt,{headers:{'content-type':'application/json','x-t':String(Date.now())}})); }catch(err){} return j; } lastErr=new Error('empty'); }
+      else lastErr=new Error('HTTP '+r.status); }catch(err){ clearTimeout(tm); lastErr=err; } }
   throw lastErr||new Error('overpass');
 }
 const LEVEL_H=6.5;
