@@ -51,6 +51,10 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #branch .opt{background:var(--sign);color:var(--sign-ink);border:3px solid var(--sign-edge);border-radius:6px;padding:6px 12px;font-weight:700;font-size:15px;display:flex;gap:8px;align-items:center;opacity:.72}
 #branch .opt.on{opacity:1;border-color:var(--amber);box-shadow:0 0 0 3px rgba(242,182,50,.35)}
 #branch .arr{font-size:20px;line-height:1;display:inline-block}
+#branch .lanes{display:flex;gap:4px;width:100%;justify-content:center}
+#branch .ln{width:34px;height:40px;border-radius:4px;background:rgba(10,18,15,.7);border:2px solid rgba(238,243,239,.55);display:grid;place-items:center;color:var(--ink);font-size:14px}
+#branch .ln.ex{background:var(--sign);border-color:var(--amber)}
+#branch .ln.me{box-shadow:0 0 0 3px var(--amber)}
 #branch .hint{width:100%;text-align:center;font-size:12px;color:var(--ink);text-shadow:0 1px 3px #000}
 
 /* cluster */
@@ -79,6 +83,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 #hold[hidden]{display:none}
 #gsiCredit{bottom:calc(2px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);font-size:10px;color:rgba(238,243,239,.75);text-shadow:0 1px 2px #000;pointer-events:auto;white-space:nowrap}
 #gsiCredit a{color:inherit}
+#osmCredit{bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);font-size:10px;color:rgba(238,243,239,.75);text-shadow:0 1px 2px #000;pointer-events:auto;white-space:nowrap}
+#osmCredit a{color:inherit}
 
 /* touch pad */
 #pad{position:fixed;z-index:6;left:0;right:0;bottom:calc(200px + env(safe-area-inset-bottom,0px));display:none;justify-content:space-between;padding-inline:14px;pointer-events:none}
@@ -142,6 +148,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <div class="hud" id="branch" hidden></div>
 <div class="hud" id="toast" hidden></div>
 <div class="hud" id="hold" hidden>地形・航空写真を読み込み中…</div>
+<div class="hud" id="osmCredit" hidden>道路の車線・ランプ・高架：<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></div>
 <div class="hud" id="gsiCredit" hidden><a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>（シームレス空中写真・標高タイル）を加工して表示</div>
 
 <div class="hud" id="cluster">
@@ -179,7 +186,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <div id="side">
     <div class="row"><h2>地図・設定</h2><button class="btn" id="bClose" type="button">走行に戻る <kbd>M</kbd></button></div>
 
-    <div class="blk">
+    <div class="blk" id="osmBlk">
+      <h3>詳細モード（立体交差・車線・出口）</h3>
+      <div class="note">OpenStreetMapの車線数・ランプ・高架の段を使い、出口車線と導流帯、頭上の出口標識を再現します。進路は車線位置で決まります（出口車線にいないと出られません）。約19km四方を読み込みます。</div>
+      <div class="seg"><button type="button" class="btn primary" id="bKanjo">阪神高速 環状線から走る</button><button type="button" class="btn" id="bOsmHere">今いる周辺で詳細モード</button><button type="button" class="btn" id="bOsmOff" hidden>全国モードに戻る</button></div>
+    </div>
+
+    <div class="blk" id="yearBlk">
       <h3>道路網の年</h3>
       <div class="row"><span class="big" id="yearBig">2024</span><span class="note" id="yearKm"></span></div>
       <input type="range" id="year" min="1962" max="2024" step="1" value="2024" aria-label="道路網の年">
@@ -288,7 +301,7 @@ const ALIAS = {
  '近畿自動車道伊勢線':'伊勢道','近畿自動車道名古屋・大阪線':'東名阪道・新名神','近畿自動車道名古屋・神戸線':'伊勢湾岸道・新名神','近畿自動車道敦賀線':'舞鶴若狭道','近畿自動車道紀勢線':'紀勢道',
  '関西国際空港線':'関空道','関越自動車道上越線':'上信越道','関越自動車道新潟線':'関越道','関門自動車道':'関門道','首都圏中央連絡自動車道':'圏央道'
 };
-function commonName(e,lon,d){ if(e.typ===9){ const p=e.name.split(':'); const to=(d===-1?p[3]:p[2]).split('/').filter(Boolean).map(n=>commonName({name:n,typ:1},lon)); return d? (to.join('・')||p[1])+' 方面' : p[1]+' 連絡路'; }
+function commonName(e,lon,d){ if(e.typ===10) return e.name||(e.link?'ランプ':'本線'); if(e.typ===9){ const p=e.name.split(':'); const to=(d===-1?p[3]:p[2]).split('/').filter(Boolean).map(n=>commonName({name:n,typ:1},lon)); return d? (to.join('・')||p[1])+' 方面' : p[1]+' 連絡路'; }
   if(e.name==='中央自動車道西宮線') return lon>136.93?'中央道':'名神高速';
   if(e.name==='近畿自動車道名古屋・大阪線') return lon<135.62?'近畿道':lon<136.2?'新名神':'東名阪道';
   if(e.name==='近畿自動車道名古屋・神戸線') return lon>136.45?'伊勢湾岸道':'新名神高速'; return ALIAS[e.name]||e.name; }
@@ -300,10 +313,10 @@ const validE = e => e.ss<=YEAR && YEAR<e.se && e.open<=YEAR;
 const validJ = j => j.ss<=YEAR && YEAR<j.se && j.open<=YEAR;
 
 /* ================= lane geometry ================= */
-function laneCfg(e){ if(e.typ===9) return {div:false,per:1,ramp:true}; const L=e.lanes; if(L<=2) return {div:false,per:1}; return {div:true,per:Math.max(1,Math.round(L/2))}; }
-function halfWidth(e){ const c=laneCfg(e); if(c.ramp) return 4; return c.div ? 1.5+0.75+c.per*3.5+2.5 : 1.5+3.5+0.5; }
-function laneOffset(e,k){ const c=laneCfg(e); if(c.ramp) return 0; if(!c.div) return 2.25; return 1.5+0.75+k*3.5+1.75; } // k=0 median side
-function outerLane(e){ return laneCfg(e).per-1; }
+function laneCfg(e){ if(e.typ===10) return {div:false,per:e.lanes,one:true}; if(e.typ===9) return {div:false,per:1,ramp:true}; const L=e.lanes; if(L<=2) return {div:false,per:1}; return {div:true,per:Math.max(1,Math.round(L/2))}; }
+function halfWidth(e){ const c=laneCfg(e); if(c.one) return c.per*1.75+0.9; if(c.ramp) return 4; return c.div ? 1.5+0.75+c.per*3.5+2.5 : 1.5+3.5+0.5; }
+function laneOffset(e,k){ const c=laneCfg(e); if(c.one) return ((c.per-1)/2-k)*3.5; if(c.ramp) return 0; if(!c.div) return 2.25; return 1.5+0.75+k*3.5+1.75; } // k=0 median side
+function outerLane(e){ const c=laneCfg(e); return c.one?0:c.per-1; }
 
 /* ================= smoothed paths ================= */
 const STEP=6;
@@ -319,14 +332,15 @@ function path(e){
     lo=lo2;la=la2;
   }
   const cum=new Float64Array(m); for(let i=1;i<m;i++) cum[i]=cum[i-1]+segLen(lo[i-1],la[i-1],lo[i],la[i]);
-  e.P={lon:lo,lat:la,cum,len:cum[m-1],n:m,ratio:cum[m-1]/(e.len||1)};
+  let lev=null; if(e.hT!==undefined){ lev=new Float32Array(m); for(let i=0;i<m;i++) lev[i]=levAt(e,e.len*i/(m-1)); }
+  e.P={lon:lo,lat:la,cum,len:cum[m-1],n:m,ratio:cum[m-1]/(e.len||1),lev};
   return e.P;
 }
 function sampleAt(e,s,out){
   const P=path(e); s=Math.max(0,Math.min(P.len,s));
   let lo=0,hi=P.n-1; while(hi-lo>1){const md=(lo+hi)>>1; if(P.cum[md]<=s) lo=md; else hi=md;}
   const L=P.cum[hi]-P.cum[lo], u=L>0?(s-P.cum[lo])/L:0;
-  out.lon=P.lon[lo]+(P.lon[hi]-P.lon[lo])*u; out.lat=P.lat[lo]+(P.lat[hi]-P.lat[lo])*u;
+  out.lon=P.lon[lo]+(P.lon[hi]-P.lon[lo])*u; out.lat=P.lat[lo]+(P.lat[hi]-P.lat[lo])*u; out.lev=P.lev?P.lev[lo]+(P.lev[hi]-P.lev[lo])*u:0;
   const k=Math.cos(out.lat*D2R); let hx=(P.lon[hi]-P.lon[lo])*111320*k, hz=-(P.lat[hi]-P.lat[lo])*KY; const hl=Math.hypot(hx,hz)||1; out.hx=hx/hl; out.hz=hz/hl;
   return out;
 }
@@ -392,8 +406,8 @@ const ringMat=new THREE.MeshBasicMaterial({color:0x7d8fa0,fog:false,side:THREE.D
 const ring=new THREE.Mesh(ringGeo,ringMat); scene.add(ring);
 
 /* ================= textures ================= */
-function roadTexture(div,per,ramp){
-  const hw=ramp?4:div?(1.5+0.75+per*3.5+2.5):(1.5+3.5+0.5); const W=hw*2; const px=512, py=256; const c=document.createElement('canvas');c.width=px;c.height=py;const g=c.getContext('2d');
+function roadTexture(div,per,ramp,one){
+  const hw=one?per*1.75+0.9:ramp?4:div?(1.5+0.75+per*3.5+2.5):(1.5+3.5+0.5); const W=hw*2; const px=512, py=256; const c=document.createElement('canvas');c.width=px;c.height=py;const g=c.getContext('2d');
   g.fillStyle='#484b4e';g.fillRect(0,0,px,py);
   for(let i=0;i<5000;i++){const v=50+Math.random()*40|0;g.fillStyle=`rgb(${v},${v+2},${v+4})`;g.fillRect(Math.random()*px,Math.random()*py,1.5,1.5);}
   const X=m=>(m+hw)/W*px; const line=(m,w,col,dash)=>{g.fillStyle=col;const x=X(m)-w/W*px/2,ww=Math.max(2,w/W*px);if(dash){g.fillRect(x,0,ww,py*0.4);}else g.fillRect(x,0,ww,py);};
@@ -401,7 +415,8 @@ function roadTexture(div,per,ramp){
   g.globalAlpha=.10;g.fillStyle='#000';
   if(div){for(let s of[-1,1])for(let k=0;k<per;k++){const c0=s*(1.5+0.75+k*3.5+1.75);g.fillRect(X(c0-1.1)-6,0,12,py);g.fillRect(X(c0+0.8)-6,0,12,py);}}
   g.globalAlpha=1;
-  if(ramp){ line(-2.4,0.2,'#eeeeee'); line(2.4,0.2,'#eeeeee'); }
+  if(one){ const E0=per*1.75; line(-E0,0.2,'#eeeeee'); line(E0,0.2,'#eeeeee'); for(let k=1;k<per;k++) line(-E0+k*3.5,0.15,'#eeeeee',true); }
+  else if(ramp){ line(-2.4,0.2,'#eeeeee'); line(2.4,0.2,'#eeeeee'); }
   else if(div){
     g.fillStyle='#2e3133';g.fillRect(X(-1.5),0,X(1.5)-X(-1.5),py);
     for(const s of[-1,1]){
@@ -416,7 +431,7 @@ function roadTexture(div,per,ramp){
   const t=new THREE.CanvasTexture(c);t.wrapS=THREE.ClampToEdgeWrapping;t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());return t;
 }
 const roadMats=new Map();
-function roadMat(e){const c=laneCfg(e);const key=c.div+':'+c.per+':'+!!c.ramp;let m=roadMats.get(key);if(!m){m=new THREE.MeshLambertMaterial({map:roadTexture(c.div,c.per,c.ramp),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});roadMats.set(key,m);}return m;}
+function roadMat(e){const c=laneCfg(e);const key=c.div+':'+c.per+':'+!!c.ramp+':'+!!c.one;let m=roadMats.get(key);if(!m){m=new THREE.MeshLambertMaterial({map:roadTexture(c.div,c.per,c.ramp,c.one),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});roadMats.set(key,m);}return m;}
 const railMat=new THREE.MeshLambertMaterial({color:0xc9ced1,side:THREE.DoubleSide});
 const wallMat=new THREE.MeshLambertMaterial({color:0xa7a49c,side:THREE.DoubleSide});
 const medMat=new THREE.MeshLambertMaterial({color:0x9ea3a1,side:THREE.DoubleSide});
@@ -450,7 +465,7 @@ function buildChunk(e,ci){
   const P=path(e); const i0=ci*CH, i1=Math.min(P.n-1,(ci+1)*CH); if(i1<=i0) return null;
   if(REAL){ let a0=1e9,a1=-1e9,b0=1e9,b1=-1e9; for(let i=i0;i<=i1;i++){a0=Math.min(a0,P.lon[i]);a1=Math.max(a1,P.lon[i]);b0=Math.min(b0,P.lat[i]);b1=Math.max(b1,P.lat[i]);}
     if(!ensureDem(a0-0.004,b0-0.004,a1+0.004,b1+0.004)) return null; }
-  const hw=halfWidth(e), c=laneCfg(e), urban=e.typ===5, eps=0.02*(e.i%4);
+  const hw=halfWidth(e), c=laneCfg(e), urban=e.typ===5||e.typ===10, eps=0.02*(e.i%4);
   const kp=[],kIdx=[],kpl=[],kplIdx=[]; const surf=[],uv=[],sIdx=[]; const rail=[],rIdx=[]; const med=[],mIdx=[]; const poles=[],pIdx=[]; const lamps=[],lIdx=[]; const refl=[],fIdx=[];
   let prev=null; const n=i1-i0+1;
   const L=[],R=[],Y=[],NX=[],NZ=[],X=[],Z=[],S=[],G=[];
@@ -458,8 +473,9 @@ function buildChunk(e,ci){
     const a=Math.max(0,i-1),b=Math.min(P.n-1,i+1);
     const k=Math.cos(P.lat[i]*D2R); let tx=(P.lon[b]-P.lon[a])*111320*k, tz=-(P.lat[b]-P.lat[a])*KY; const tl=Math.hypot(tx,tz)||1; tx/=tl;tz/=tl;
     const nx=tz, nz=-tx; // left normal
-    X.push(LX(P.lon[i]));Z.push(LZ(P.lat[i]));Y.push(roadY(P.lon[i],P.lat[i])+eps);NX.push(nx);NZ.push(nz);S.push(P.cum[i]);G.push(REAL?(demAt(P.lon[i],P.lat[i])??Y[Y.length-1]):Y[Y.length-1]);
+    X.push(LX(P.lon[i]));Z.push(LZ(P.lat[i]));Y.push(roadY(P.lon[i],P.lat[i])+eps+(P.lev?P.lev[i]:0));NX.push(nx);NZ.push(nz);S.push(P.cum[i]);G.push(REAL?(demAt(P.lon[i],P.lat[i])??Y[Y.length-1]):Y[Y.length-1]);
   }
+  if(e.typ===10){ for(let j=0;j<n;j++){ const o=offAtS(e,S[j]); X[j]+=NX[j]*o; Z[j]+=NZ[j]*o; } }
   // surface
   for(let j=0;j<n;j++){
     surf.push(X[j]+NX[j]*hw,Y[j],Z[j]+NZ[j]*hw, X[j]-NX[j]*hw,Y[j],Z[j]-NZ[j]*hw); uv.push(0,S[j]/20,1,S[j]/20);
@@ -491,7 +507,7 @@ function buildChunk(e,ci){
   // tunnels & viaducts (real terrain only)
   const tun=[],tub=[],tIdx=[],tl=[],tlIdx=[],pier=[],pIdx2=[];
   if(REAL){
-    const raw=[]; for(let j=0;j<n;j++) raw.push(G[j]-Y[j]>TUN);
+    const raw=[]; for(let j=0;j<n;j++) raw.push(G[j]-Y[j]>TUN||(P.lev&&P.lev[i0+j]<-3));
     for(let j=0;j<n;j++){ let t=false; for(let k=Math.max(0,j-4);k<=Math.min(n-1,j+4);k++) if(raw[k]) t=true; tun.push(t); }
     const W=hw+0.6, WR=hw+7; const prof=[[W,0],[W,4.6],[W*0.72,7.0],[0,8.0],[-W*0.72,7.0],[-W,4.6],[-W,0]];
     for(let j=0;j<n;j++){ if(!tun[j]) continue;
@@ -517,8 +533,38 @@ function buildChunk(e,ci){
   mk(poles,pIdx,poleMat);
   mk(lamps,lIdx,lampMat);
   mk(refl,fIdx,reflMat);
+  if(e.typ===10){
+    const dsh=[],dI=[], zb=[],zu=[],zI=[];
+    for(const d of e.dashes){ const s0=d.s0*P.ratio, s1=d.s1*P.ratio;
+      for(let j=0;j<n-1;j++){ if(S[j]<s0||S[j]>s1) continue; if(Math.floor(S[j]/9)%2) continue; const o=d.b, b0=dsh.length/3;
+        dsh.push(X[j]+NX[j]*(o+0.22),Y[j]+0.035,Z[j]+NZ[j]*(o+0.22), X[j]+NX[j]*(o-0.22),Y[j]+0.035,Z[j]+NZ[j]*(o-0.22), X[j+1]+NX[j+1]*(o+0.22),Y[j+1]+0.035,Z[j+1]+NZ[j+1]*(o+0.22), X[j+1]+NX[j+1]*(o-0.22),Y[j+1]+0.035,Z[j+1]+NZ[j+1]*(o-0.22));
+        dI.push(b0,b0+1,b0+2,b0+1,b0+3,b0+2); } }
+    const gz=(g0,atEnd)=>{ const main=g0.main, sd=g0.side, Pm=path(main); const hwl=hw, hwm=halfWidth(main);
+      let prev=null;
+      for(let j=0;j<n;j++){ const sl=atEnd?(P.len-S[j]):S[j]; if(sl>130){ prev=null; continue; }
+        const sm=atEnd?Pm.len-sl:sl; sampleAt(main,sm,tmpS); const mo=offAtS(main,sm); const mhx=tmpS.hx, mhz=tmpS.hz;
+        const mx=LX(tmpS.lon)+mhz*mo, mz=LZ(tmpS.lat)-mhx*mo;
+        const ix=X[j]-NX[j]*sd*hwl, iz=Z[j]-NZ[j]*sd*hwl; // inner edge of this ramp (towards the main line)
+        const lat=(mx-ix)*NX[j]*(-sd)+(mz-iz)*NZ[j]*(-sd); const gap=Math.min(14,lat-hwm);
+        if(gap<0.3){ prev=null; continue; }
+        const ox=ix-NX[j]*sd*gap, oz=iz-NZ[j]*sd*gap; const cur=[ix,Y[j]+0.03,iz,ox,Y[j]+0.03,oz,S[j],gap];
+        if(prev){ const b0=zb.length/3; zb.push(...prev.slice(0,6),...cur.slice(0,6)); zu.push(0,prev[6]/3,prev[7]/3,prev[6]/3,0,cur[6]/3,cur[7]/3,cur[6]/3); zI.push(b0,b0+1,b0+2,b0+1,b0+3,b0+2); }
+        prev=cur; } };
+    if(e.gore) gz(e.gore,false); if(e.goreEnd) gz(e.goreEnd,true);
+    mk(dsh,dI,paintMat); mk(zb,zI,zebraMat,zu);
+    for(const gt of e.gantries){ const sp=gt.s*P.ratio; if(sp<S[0]||sp>=S[n-1]) continue; const jj=Math.min(n-1,Math.max(0,Math.round((sp-S[0])/STEP)));
+      const fxv=-NZ[jj], fzv=NX[jj], yaw=Math.atan2(fxv,fzv); const span=hw+0.6;
+      const beam=new THREE.Mesh(new THREE.BoxGeometry(span*2,0.45,0.45),beamMat); beam.position.set(X[jj],Y[jj]+7.4,Z[jj]); beam.rotation.y=yaw; beam.matrixAutoUpdate=false; beam.updateMatrix(); g.add(beam);
+      const pl=[],pI=[]; for(const sd of[1,-1]) box(pl,pI,X[jj]+NX[jj]*span*sd,Y[jj],Z[jj]+NZ[jj]*span*sd,0.25,7.6,0.25); mk(pl,pI,beamMat);
+      const N=e.lanes, L=Math.min(gt.lanes,N), exW=L*3.5; const exC=gt.side*(N*1.75-exW/2); const arrow=gt.side>0?'↙':'↘';
+      const exBoard=new THREE.Mesh(gPlane(Math.max(3.6,exW),2.2),gantryMat(gt.name.replace(/出口$/,''),gt.type===5?'出口':'',gt.type===5?'⬇':'⬇',gt.D>=300?gt.D+'m':'',gt.type===5?'exit':'jct'));
+      exBoard.position.set(X[jj]+NX[jj]*exC,Y[jj]+6.0,Z[jj]+NZ[jj]*exC); exBoard.rotation.y=yaw+Math.PI; exBoard.matrixAutoUpdate=false; exBoard.updateMatrix(); g.add(exBoard);
+      if(N>L){ const mW=(N-L)*3.5, mC=-gt.side*(N*1.75-mW/2); const mb=new THREE.Mesh(gPlane(Math.max(3.6,mW-0.4),2.2),gantryMat(gt.mainName||'本線','','⬇','','main'));
+        mb.position.set(X[jj]+NX[jj]*mC,Y[jj]+6.0,Z[jj]+NZ[jj]*mC); mb.rotation.y=yaw+Math.PI; mb.matrixAutoUpdate=false; mb.updateMatrix(); g.add(mb); }
+    }
+  }
   mk(tub,tIdx,tunnelMat); mk(tl,tlIdx,tlampMat); mk(pier,pIdx2,pierMat); mk(kp,kIdx,kpMat); mk(kpl,kplIdx,kplMat);
-  const jl=e.joints.filter(validJ);
+  const jl=MODE_OSM?[]:e.joints.filter(validJ);
   if(jl.length && n>2){ const sMin=S[0], sMax=S[n-1];
     for(const jn of jl){ const js=jn.sRaw*P.ratio;
       for(const dir of [1,-1]) for(const Dd of [2000,1000,500]){ const ss=js-dir*Dd; if(ss<sMin||ss>=sMax) continue;
@@ -888,6 +934,134 @@ function nearestStation(){ let best=null,bd=6000; const tx=Math.floor(lon2x(car.
   for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){ const bv=BV.get((tx+dx)+'/'+(ty+dy)); if(!bv||!bv.labels) continue; for(const L of bv.labels){ if(L.cat!==422&&L.cat!==421) continue; const d=segLen(car.lon,car.lat,L.lon,L.lat); if(d<bd){bd=d;best={name:L.text.endsWith('駅')?L.text:L.text+'駅',d};} } }
   return best; }
 
+/* ================= detailed mode: OpenStreetMap lanes, ramps and levels ================= */
+let MODE_OSM=false;
+const OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+async function fetchOSM(s,w,n,e){
+  const q=`[out:json][timeout:90];way["highway"~"^(motorway|motorway_link)$"](${s.toFixed(4)},${w.toFixed(4)},${n.toFixed(4)},${e.toFixed(4)});out body geom;`;
+  let lastErr=null;
+  for(const u of OVERPASS){ try{ const r=await fetch(u,{method:'POST',body:'data='+encodeURIComponent(q)}); if(r.ok){ const j=await r.json(); if(j&&j.elements&&j.elements.length) return j; lastErr=new Error('empty'); } else lastErr=new Error('HTTP '+r.status); }catch(err){ lastErr=err; } }
+  throw lastErr||new Error('overpass');
+}
+const LEVEL_H=6.5;
+function osmLevel(t){ let L=parseFloat(t.layer); if(!isFinite(L)) L=0; const br=t.bridge&&t.bridge!=='no', tu=t.tunnel&&t.tunnel!=='no';
+  if(tu) return Math.min(L,-1); if(br&&L<1) L=1; return L; }
+function osmLanes(t){ let n=parseInt(t.lanes,10); if(!(n>0)) n=/link/.test(t.highway||'')?1:2; return Math.min(n,6); }
+const laneW=e=>e.lanes*3.5;
+function levAt(e,sr){ if(e.hT===undefined) return 0; const D=Math.min(e.len/2,180)||1;
+  return e.hT+(e.hA-e.hT)*Math.max(0,1-sr/D)+(e.hB-e.hT)*Math.max(0,1-(e.len-sr)/D); }
+function offAtS(e,sp){ if(e.typ!==10) return 0; const P=path(e); const sr=sp/(P.ratio||1); const T=Math.min(160,e.len*0.45)||1;
+  return e.offS*Math.max(0,1-sr/T)+e.offE*Math.max(0,1-(e.len-sr)/T); }
+function laneFromLat(e,lat){ const N=e.lanes; return Math.max(0,Math.min(N-1,Math.round((N-1)/2-lat/3.5))); }
+// lateral position of point q relative to p for heading h (left positive)
+function latOf(p,q,h){ const k=Math.cos(p[1]*D2R)*111320; const dx=(q[0]-p[0])*k, dz=-(q[1]-p[1])*KY; return dx*h[1]+dz*(-h[0]); }
+function ptAlong(e,d,fromEnd){ const s=fromEnd?Math.max(0,e.len-d):Math.min(e.len,d); let k=0; while(k<e.cum.length-2&&e.cum[k+1]<s) k++; const L=e.cum[k+1]-e.cum[k]; const u=L>0?(s-e.cum[k])/L:0; return [e.lon[k]+(e.lon[k+1]-e.lon[k])*u, e.lat[k]+(e.lat[k+1]-e.lat[k])*u]; }
+function rawHeading(e,atEnd){ const p=atEnd?ptAlong(e,25,true):[e.lon[0],e.lat[0]], q=atEnd?[e.lon[e.lon.length-1],e.lat[e.lat.length-1]]:ptAlong(e,25,false);
+  const k=Math.cos(p[1]*D2R)*111320; let x=(q[0]-p[0])*k, z=-(q[1]-p[1])*KY; const l=Math.hypot(x,z)||1; return [x/l,z/l]; }
+const shortRoute=n=>(n||'').replace(/^阪神高速|^首都高速|^名古屋高速|^福岡高速|^北九州高速|^広島高速/,'').replace(/^\d+号/,m=>m);
+function buildOSMNetwork(data){
+  const ways=[];
+  for(const el of data.elements){ if(el.type!=='way'||!el.geometry||!el.nodes||el.nodes.length<2||el.geometry.length!==el.nodes.length) continue;
+    const t=el.tags||{}; let ids=el.nodes.slice(), g=el.geometry.map(p=>[p.lon,p.lat]);
+    if(t.oneway==='-1'){ ids.reverse(); g.reverse(); }
+    ways.push({ids,g,t});
+    if(t.oneway==='no') ways.push({ids:ids.slice().reverse(),g:g.slice().reverse(),t}); }
+  const cnt=new Map(); for(const w of ways) w.ids.forEach((id,i)=>cnt.set(id,(cnt.get(id)||0)+((i===0||i===w.ids.length-1)?2:1)));
+  const nIndex=new Map(); const nodes=[];
+  const nid=(id,p)=>{ let i=nIndex.get(id); if(i===undefined){ i=nodes.length; nIndex.set(id,i); nodes.push([p[0],p[1]]); } return i; };
+  const edges=[];
+  for(const w of ways){ let st=0;
+    for(let i=1;i<w.ids.length;i++){ if(i===w.ids.length-1||cnt.get(w.ids[i])>=2){
+      const n=i-st+1; const lon=new Float64Array(n), lat=new Float64Array(n), cum=new Float64Array(n);
+      for(let k=0;k<n;k++){ lon[k]=w.g[st+k][0]; lat[k]=w.g[st+k][1]; if(k) cum[k]=cum[k-1]+segLen(lon[k-1],lat[k-1],lon[k],lat[k]); }
+      if(cum[n-1]>0.5){ let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; for(let k=0;k<n;k++){x0=Math.min(x0,lon[k]);x1=Math.max(x1,lon[k]);y0=Math.min(y0,lat[k]);y1=Math.max(y1,lat[k]);}
+        const t=w.t; edges.push({i:edges.length,a:nid(w.ids[st],w.g[st]),b:nid(w.ids[i],w.g[i]),name:t.name||t['name:ja']||'',ref:t.ref||'',link:/link/.test(t.highway||''),
+          open:0,ss:0,se:9999,lanes:osmLanes(t),typ:10,lon,lat,cum,len:cum[n-1],bb:[x0,y0,x1,y1],P:null,joints:[],level:osmLevel(t),offS:0,offE:0,div:null,gore:null,goreEnd:null,gantries:[],dashes:[]}); }
+      st=i; } } }
+  const ins=nodes.map(()=>[]), outs=nodes.map(()=>[]), inc=nodes.map(()=>[]);
+  for(const e of edges){ outs[e.a].push(e); ins[e.b].push(e); inc[e.a].push(e); inc[e.b].push(e); }
+  // node heights: mainline decides, ramps adapt
+  const nh=new Float64Array(nodes.length);
+  for(let v=0;v<nodes.length;v++){ const es=inc[v]; const main=es.filter(e=>!e.link);
+    if(main.length) nh[v]=Math.max(...main.map(e=>e.level))*LEVEL_H;
+    else if(es.length===1) nh[v]=Math.min(0,es[0].level)*LEVEL_H;
+    else nh[v]=es.reduce((a,e)=>a+e.level,0)/es.length*LEVEL_H; }
+  for(const e of edges){ e.hA=nh[e.a]; e.hB=nh[e.b]; e.hT=e.level*LEVEL_H; }
+  // lane arrangement at diverges and merges
+  const pickMain=(list,ref)=>{ const cand=list.slice().sort((p,q)=>(p.link-q.link)||((q.name===ref.name)-(p.name===ref.name))||(q.lanes-p.lanes)); return cand[0]; };
+  const exits=[];
+  for(let v=0;v<nodes.length;v++){
+    const I=ins[v], O=outs[v];
+    if(I.length===1&&O.length>=2){ const u=I[0]; const Os=O.filter(o=>!(o.b===u.a&&o.name===u.name)); if(Os.length<2) continue;
+      const h=rawHeading(u,true), p=nodes[v]; for(const o of Os) o._lat=latOf(p,ptAlong(o,45,false),h); Os.sort((a,b)=>b._lat-a._lat);
+      const Wu=laneW(u);
+      if(Os.length===2){ const main=pickMain(Os,u), link=Os.find(o=>o!==main); const s=Math.sign(link._lat-main._lat)||1; const Wm=laneW(main), Wl=laneW(link);
+        if(Wu>=Wm){ main.offS=-s*(Wu-Wm)/2; link.offS=s*(Wm-Wu/2+Wl/2); } else { main.offS=0; link.offS=s*(Wm/2+Wl/2); }
+        u.div={main,link,side:s,b:s*(Wm-Wu/2),ok:Wu>=Wm+Wl-0.1};
+        link.gore={main,side:s}; exits.push({u,main,link,side:s,v});
+      } else { let tot=Os.reduce((a,o)=>a+laneW(o),0), x=tot/2; for(const o of Os){ o.offS=x-laneW(o)/2; x-=laneW(o); } }
+    }
+    if(O.length===1&&I.length>=2){ const o=O[0]; const Is=I.filter(i=>!(i.a===o.b&&i.name===o.name)); if(Is.length<2) continue;
+      const h=rawHeading(o,false), p=nodes[v]; for(const i of Is) i._lat=latOf(p,ptAlong(i,45,true),h); Is.sort((a,b)=>b._lat-a._lat);
+      const Wo=laneW(o);
+      if(Is.length===2){ const main=pickMain(Is,o), link=Is.find(i=>i!==main); const s=Math.sign(link._lat-main._lat)||1; const Wm=laneW(main), Wl=laneW(link);
+        if(Wo>=Wm){ main.offE=-s*(Wo-Wm)/2; link.offE=s*(Wm-Wo/2+Wl/2); } else { main.offE=0; link.offE=s*(Wm/2+Wl/2); }
+        link.goreEnd={main,side:s};
+      } else { let tot=Is.reduce((a,i)=>a+laneW(i),0), x=tot/2; for(const i of Is){ i.offE=x-laneW(i)/2; x-=laneW(i); } }
+    }
+  }
+  // exits: name, joints for the guide, overhead gantries and the deceleration-lane dashes
+  const jlist=[];
+  for(const x of exits){ let e=x.link, name='', type=5;
+    for(let k=0;k<8&&e;k++){ if(/出口$/.test(e.name)){ name=e.name; break; } if(!e.link){ name='→ '+shortRoute(e.name||e.ref||'本線'); type=3; break; }
+      const nx=outs[e.b]; if(!nx.length) break; e=nx.find(o=>o.link)||nx[0]; }
+    if(!name){ if(/入口$/.test(x.link.name)) continue; name=x.link.name||'出口'; }
+    const u=x.u, s=x.side, L=x.link.lanes;
+    const j={name,type,open:0,ss:0,se:9999,e:u,sRaw:u.len,lon:nodes[x.v][0],lat:nodes[x.v][1],side:s,lanes:L,link:x.link,mainName:shortRoute(x.main.name)};
+    u.joints.push(j); jlist.push(j);
+    if(u.div&&u.div.ok) u.dashes.push({s0:Math.max(0,u.len-280),s1:u.len,b:u.div.b});
+    // gantries 500 m and 150 m before the split, walking back through single predecessors
+    for(const D of [500,150]){ let e2=u, back=D, guard=0;
+      while(back>e2.len&&guard++<8){ const pr=ins[e2.a]; if(pr.length!==1) break; back-=e2.len; e2=pr[0]; }
+      if(back>e2.len) continue; const sr=e2.len-back;
+      e2.gantries.push({s:sr,name,type,side:s,lanes:L,mainName:j.mainName,D}); }
+  }
+  // swap the network in place
+  NODES.length=0; for(const p of nodes) NODES.push(p);
+  E.length=0; for(const e of edges) E.push(e);
+  ADJ.length=0; for(let v=0;v<nodes.length;v++) ADJ.push([]); for(const e of edges) ADJ[e.a].push({e,d:1});
+  JOINTS.length=0; for(const j of jlist) JOINTS.push(j);
+  EGRID.clear(); for(const e of E){for(let cx=Math.floor(e.bb[0]*20);cx<=Math.floor(e.bb[2]*20);cx++)for(let cy=Math.floor(e.bb[1]*20);cy<=Math.floor(e.bb[3]*20);cy++){const k=gk(cx,cy);let l=EGRID.get(k);if(!l)EGRID.set(k,l=[]);l.push(e);}}
+  RH.clear(); for(const e of E){ const hw=halfWidth(e); const push=(lo,la)=>{const k=rk(Math.floor(lo*RC),Math.floor(la*RC));let l=RH.get(k);if(!l)RH.set(k,l=[]);l.push(lo,la,e.i,hw);};
+    push(e.lon[0],e.lat[0]); for(let k=1;k<e.lon.length;k++){const L=e.cum[k]-e.cum[k-1];const m=Math.max(1,Math.ceil(L/25));for(let t=1;t<=m;t++){const u=t/m;push(e.lon[k-1]+(e.lon[k]-e.lon[k-1])*u,e.lat[k-1]+(e.lat[k]-e.lat[k-1])*u);}} }
+  return {edges:edges.length,exits:jlist.length};
+}
+// lateral hand-over when passing from one edge to the next (keeps the car in the lane it is physically in)
+function remapLateral(w,old,o,isCar){ const latAbs=offAtS(old,path(old).len)+(isCar?w.latOff:w.lat); const latNew=latAbs-offAtS(o.e,0);
+  if(isCar){ w.latOff=latNew; w.lane=laneFromLat(o.e,latNew); } else { w.lat=latNew; w.lane=laneFromLat(o.e,latNew); } }
+function osmChooseByLane(opts,w,isCar){ const old=w.e; const latAbs=offAtS(old,path(old).len)+(isCar?w.latOff:w.lat);
+  let best=null,bd=1e9; for(const o of opts){ const c=offAtS(o.e,0), hwid=laneW(o.e)/2; const d=Math.max(0,Math.abs(latAbs-c)-hwid); const score=d+(Math.abs(o.ang)>150?100:0); if(score<bd){bd=score;best=o;} }
+  remapLateral(w,old,best,isCar); return best; }
+function osmChooseAI(opts,w){ const old=w.e; let o=opts.find(x=>!x.e.link&&Math.abs(x.ang)<150); if(!o||Math.random()<0.12) o=opts.filter(x=>Math.abs(x.ang)<150)[Math.floor(Math.random()*opts.length)]||opts[0]; remapLateral(w,old,o,false); return o; }
+// overhead exit sign texture
+const gantryMats=new Map();
+function gantryMat(text,sub,arrow,dist,kind){ const key=[text,sub,arrow,dist,kind].join('|'); let m=gantryMats.get(key); if(m) return m;
+  const c=document.createElement('canvas'); c.width=512; c.height=300; const g=c.getContext('2d');
+  g.fillStyle=kind==='main'?'#0f5a8a':'#0b6b45'; g.fillRect(0,0,512,300); g.strokeStyle='#f1f5f2'; g.lineWidth=8; g.strokeRect(10,10,492,280);
+  g.fillStyle='#f4f7f2'; g.textAlign='center'; g.textBaseline='middle';
+  let fs=96; const F=s=>`700 ${s}px "BIZ UDPGothic","Hiragino Sans","Yu Gothic",sans-serif`; g.font=F(fs); while(g.measureText(text).width>460&&fs>36){fs-=6;g.font=F(fs);} g.fillText(text,256,92);
+  if(sub){ g.font=F(56); g.fillText(sub,dist?180:256,190); }
+  if(dist){ g.font=`700 58px "Chakra Petch","BIZ UDPGothic",sans-serif`; g.fillText(dist,380,190); }
+  g.font=F(64); g.fillText(arrow,256,256);
+  const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace; tex.anisotropy=8;
+  m=new THREE.MeshLambertMaterial({map:tex,emissive:0xffffff,emissiveMap:tex,emissiveIntensity:0.15}); gantryMats.set(key,m); signMats.set('g:'+key,m); return m; }
+const zebraTex=(()=>{ const c=document.createElement('canvas'); c.width=c.height=64; const g=c.getContext('2d'); g.fillStyle='#4a4d50'; g.fillRect(0,0,64,64); g.strokeStyle='#eceee9'; g.lineWidth=12;
+  for(let i=-64;i<=128;i+=32){ g.beginPath(); g.moveTo(i,0); g.lineTo(i+64,64); g.stroke(); } const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=8; return t; })();
+const zebraMat=new THREE.MeshLambertMaterial({map:zebraTex,side:THREE.DoubleSide});
+const paintMat=new THREE.MeshLambertMaterial({color:0xf0f2ee,side:THREE.DoubleSide});
+const gPlaneCache=new Map(); const gPlane=(w,h)=>{ const k=w.toFixed(1)+'x'+h; let p=gPlaneCache.get(k); if(!p){p=new THREE.PlaneGeometry(w,h); gPlaneCache.set(k,p);} return p; };
+const beamMat=new THREE.MeshLambertMaterial({color:0x8a9096});
+
 /* ================= graph walking ================= */
 const tmpS={},tmpS2={};
 function headingAtEnd(e,dir){ // heading when arriving at node (travel direction), local unit (x,z)
@@ -962,16 +1136,16 @@ const traffic=[];
 const PAL=['#f4f4f2','#1c1f24','#9ea4aa','#b0262a','#264b8f','#e8e0cc','#3d5a44','#c8c8c8','#f4f4f2','#20242a'];
 function spawnVehicle(t,initial){
   const w={e:car.e,s:car.s,dir:car.dir};
-  const same=Math.random()<0.62; const ahead=Math.random()<0.5;
+  const same=MODE_OSM?true:Math.random()<0.62; const ahead=MODE_OSM?true:Math.random()<0.5;
   const dist=initial?(80+Math.random()*2200):(1400+Math.random()*1200);
   if(!ahead){w.dir=-w.dir;}
-  const ok=advance(w,dist,opts=>opts[Math.floor(Math.random()*opts.length)]);
+  w.lat=0; const ok=advance(w,dist,(opts,ww)=>MODE_OSM?osmChooseAI(opts,ww):opts[Math.floor(Math.random()*opts.length)]);
   if(!ok){t.alive=false;return;}
   // w now at a position; choose travel direction
   let dir = ahead ? w.dir : -w.dir; // after walking behind we flipped; restore travel dir
   if(!same) dir=-dir;
   t.e=w.e;t.s=w.s;t.dir=dir; const c=laneCfg(t.e);
-  t.truck=Math.random()<0.2; t.lane=Math.floor(Math.random()*c.per); if(t.truck) t.lane=c.per-1;
+  t.truck=Math.random()<0.2; t.lane=Math.floor(Math.random()*c.per); if(t.truck) t.lane=c.one?0:c.per-1;
   t.v=(t.truck?78:85+Math.random()*25)/3.6; t.alive=true; t.col=new THREE.Color(t.truck?(Math.random()<.5?'#e8e6df':'#2f5c8a'):PAL[Math.floor(Math.random()*PAL.length)]);
   t.lat=laneOffset(t.e,t.lane);
   bodies.setColorAt(t.idx,t.col); bodies.instanceColor.needsUpdate=true;
@@ -984,11 +1158,11 @@ function stepTraffic(dt){
     if(t.idx>=TRAFFIC_N) t.alive=false;
     if(!t.alive){ if(t.idx<TRAFFIC_N && Math.random()<0.05) spawnVehicle(t,false); bodies.setMatrixAt(t.idx,HID);cabs.setMatrixAt(t.idx,HID);tails.setMatrixAt(t.idx*2,HID);tails.setMatrixAt(t.idx*2+1,HID);heads.setMatrixAt(t.idx*2,HID);heads.setMatrixAt(t.idx*2+1,HID);continue; }
     t.onEdge=null;
-    const ok=advance(t,t.v*dt,opts=>opts[Math.floor(Math.random()*opts.length)]);
+    const ok=advance(t,t.v*dt,(opts,w)=>MODE_OSM?osmChooseAI(opts,w):opts[Math.floor(Math.random()*opts.length)]);
     const c=laneCfg(t.e); if(t.lane>=c.per) t.lane=c.per-1; const tgt=laneOffset(t.e,t.lane); t.lat+=(tgt-t.lat)*Math.min(1,dt*1.5);
     sampleAt(t.e,t.s,tmpS);
     const hx=tmpS.hx*t.dir, hz=tmpS.hz*t.dir; const lx=hz, lz=-hx;
-    const x=LX(tmpS.lon)+lx*t.lat, z=LZ(tmpS.lat)+lz*t.lat, y=REAL?(realRoadY(tmpS.lon,tmpS.lat)??lastRoadY):baseH(tmpS.lon,tmpS.lat);
+    const aLat=t.lat+offAtS(t.e,t.s); const x=LX(tmpS.lon)+lx*aLat, z=LZ(tmpS.lat)+lz*aLat, y=(REAL?(realRoadY(tmpS.lon,tmpS.lat)??lastRoadY):baseH(tmpS.lon,tmpS.lat))+tmpS.lev;
     const d=segLen(tmpS.lon,tmpS.lat,car.lon,car.lat);
     if(!ok || d>3000 || !validE(t.e)){ t.alive=false; continue; }
     const yaw=Math.atan2(hx,hz);
@@ -1024,7 +1198,8 @@ function refreshLook(force){
     if(opts.length!==1){ found={opts,node,dist,e:w.e}; break; }
     w.e=opts[0].e; w.dir=opts[0].d; w.s=w.dir>0?0:path(w.e).len;
   }
-  if(found && found.dist<1600 && found.opts.length>=2){
+  if(MODE_OSM && found && found.opts.length>=2){ look.opts=[]; look.node=-1; look.distToNode=1e9; }
+  else if(found && found.dist<1600 && found.opts.length>=2){
     if(car.pickNode!==found.node){ car.pickNode=found.node; car.pick=defaultPick(found.e,found.opts).e; }
     look.opts=found.opts; look.node=found.node; look.distToNode=found.dist; look.fromE=found.e;
   } else if(found && found.opts.length===0){ look.opts=[]; look.node=found.node; look.distToNode=found.dist; look.dead=true; }
@@ -1049,7 +1224,7 @@ const elSign=document.getElementById('sign'), elBranch=document.getElementById('
 let lastSignHTML='', lastBranchHTML='';
 function renderSigns(){
   let h='<span class="cap">この先</span>';
-  for(const o of look.signs) h+=`<div class="row"><span class="n">${o.j.name}</span><span class="d">${fmtDist(o.d)}</span></div>`;
+  for(const o of look.signs) h+=`<div class="row"><span class="n">${o.j.side?(o.j.side>0?'← ':'→ '):''}${o.j.name}</span><span class="d">${fmtDist(o.d)}</span></div>`;
   if(h!==lastSignHTML){elSign.innerHTML=h; lastSignHTML=h;}
   elSign.classList.toggle('empty',!look.signs.length);
   let b='';
@@ -1059,6 +1234,11 @@ function renderSigns(){
       b+=`<span class="opt${o.e===car.pick?' on':''}"><span class="arr" style="transform:rotate(${rot}deg)">↑</span>${nm}</span>`; }
     b+=`<span class="hint">分岐まで ${fmtDist(look.distToNode)}　◀ ▶ で進路を選択</span>`;
   }
+  if(MODE_OSM){ const nx=look.signs.find(o=>o.d<1500&&(o.j.type===5||o.j.type===3));
+    if(nx){ const N=car.e.lanes, L=Math.min(nx.j.lanes,N), sd=nx.j.side; let lanes='';
+      for(let k=0;k<N;k++){ const ex=sd>0?k<L:k>=N-L; lanes+=`<span class="ln${ex?' ex':''}${k===car.lane?' me':''}">${k===car.lane?'▲':''}</span>`; }
+      const ok=sd>0?car.lane<L:car.lane>=N-L;
+      b=`<div class="lanes">${lanes}</div><span class="hint">${nx.j.name}まで ${fmtDist(nx.d)}：${sd>0?'左':'右'}側の${L}車線${ok?'（この車線でOK）':'へ車線変更'}</span>`; } }
   if(b!==lastBranchHTML){elBranch.innerHTML=b;lastBranchHTML=b;}
   elBranch.hidden=!b;
 }
@@ -1132,10 +1312,11 @@ addEventListener('keydown',ev=>{
   if(k==='t'||k==='T') cycleTime();
 });
 addEventListener('keyup',ev=>{keys[ev.key.toLowerCase()]=false;});
-function steer(s){ if(look.opts.length>=2 && look.distToNode<1600){ cyclePick(s); return; }
+function steer(s){ if(MODE_OSM){ car.lane=Math.max(0,Math.min(car.e.lanes-1,car.lane+s)); return; }
+  if(look.opts.length>=2 && look.distToNode<1600){ cyclePick(s); return; }
   const c=laneCfg(car.e); if(!c.div) return; const nl=car.lane-s; // left(-1) => away from median => lane+1
   car.lane=Math.max(0,Math.min(c.per-1,nl)); }
-function uturn(){ if(car.v*3.6>20){toast('Uターンは20km/h以下で。↓でブレーキ');return;} car.dir=-car.dir; car.lane=outerLane(car.e); car.blocked=false; car.pick=null;car.pickNode=-1; toast('折り返しました',1500); refreshLook(true); }
+function uturn(){ if(MODE_OSM){ toast('詳細モードは一方通行です。地図から出発地点を選び直せます。',3000); return; } if(car.v*3.6>20){toast('Uターンは20km/h以下で。↓でブレーキ');return;} car.dir=-car.dir; car.lane=outerLane(car.e); car.blocked=false; car.pick=null;car.pickNode=-1; toast('折り返しました',1500); refreshLook(true); }
 const VIEWS=['運転席','後方','上空'];
 function cycleView(){view.mode=(view.mode+1)%3; toast('視点：'+VIEWS[view.mode],1200);}
 const TS=[0,1,60,600];
@@ -1174,7 +1355,7 @@ function stepCar(dt){
   if(lead){ const safe=10+car.v*1.3; if(lead.gap<safe && car.v>lead.v){ car.v=Math.max(lead.v, car.v-12*dt*(1-lead.gap/safe)*2); if(lead.gap<8) car.v=Math.min(car.v,lead.v*0.9); } }
   car.v=Math.max(0,Math.min(VMAX,car.v)); THROTTLE=!!up;
   if(car.blocked) { car.v=0; }
-  const ok=advance(car,car.v*dt,(opts,w)=>{ const node=w.dir>0?w.e.b:w.e.a; const byPick=(car.pickNode===node)?opts.find(o=>o.e===car.pick):null; return byPick||defaultPick(w.e,opts); });
+  const ok=advance(car,car.v*dt,(opts,w)=>{ if(MODE_OSM) return osmChooseByLane(opts,car,true); const node=w.dir>0?w.e.b:w.e.a; const byPick=(car.pickNode===node)?opts.find(o=>o.e===car.pick):null; return byPick||defaultPick(w.e,opts); });
   car.odo+=car.v*dt;
   if(!ok && !car.blocked){ car.blocked=true; car.v=0; toast('この先は接続データがありません（終点または未開通）。「Uターン」で折り返すか、地図から別の場所へ移動できます。',5000); }
   const c=laneCfg(car.e); if(car.lane>=c.per) car.lane=c.per-1; const tgt=laneOffset(car.e,car.lane); car.latOff+=(tgt-car.latOff)*Math.min(1,dt*1.6);
@@ -1188,6 +1369,7 @@ function renderRoute(){
   const e=car.e; $('rName').textContent=commonName(e,car.lon); $('rKind').textContent=KIND[e.typ]||'自動車専用道路';
   $('rLegal').textContent=(commonName(e,car.lon)!==e.name)?e.name:'';
   if(e.typ===9){ $('rLegal').textContent=''; $('rMeta').textContent=commonName(e,car.lon,car.dir); return; }
+  if(e.typ===10){ $('rName').textContent=e.name||(e.link?'連絡路・ランプ':'本線'); $('rKind').textContent=e.link?'ランプ（OpenStreetMap）':'本線（OpenStreetMap）'; $('rLegal').textContent=''; sampleAt(e,car.s,tmpS2); $('rMeta').textContent=`${e.lanes}車線・一方通行・地上から約${Math.max(0,Math.round(tmpS2.lev))}m`; return; }
   $('rMeta').textContent=`${e.open}年開通・${e.lanes}車線`+(e.lanes<=2?'（対面通行）':'');
 }
 const fmtHM=m=>{m=((m%1440)+1440)%1440;return String(Math.floor(m/60)).padStart(2,'0')+':'+String(Math.floor(m%60)).padStart(2,'0');};
@@ -1195,7 +1377,7 @@ function renderSpeeds(){ document.querySelectorAll('#speeds button').forEach(b=>
 
 /* ================= minimap ================= */
 const mc=$('miniC'), mg=mc.getContext('2d');
-const TYPCOL={1:'#3fbf7f',2:'#8fb4ff',3:'#8fb4ff',4:'#e27cff',5:'#ff9f5a',6:'#8fb4ff',9:'#f2b632'};
+const TYPCOL={1:'#3fbf7f',2:'#8fb4ff',3:'#8fb4ff',4:'#e27cff',5:'#ff9f5a',6:'#8fb4ff',9:'#f2b632',10:'#ff9f5a'};
 function drawMini(){
   const W=mc.width, R=W/2, range=5000, sc=R/range; mg.clearRect(0,0,W,W);
   mg.save(); mg.translate(R,R);
@@ -1302,6 +1484,27 @@ function drawFx(){ const k=smooth(150/3.6,VMAX,car.v)*(view.mode===2?0:1)*(panel
     fxG.beginPath(); fxG.moveTo(cx+Math.cos(a)*r0,cy+Math.sin(a)*r0*0.8); fxG.lineTo(cx+Math.cos(a)*r1,cy+Math.sin(a)*r1*0.8); fxG.stroke(); }
   const vg=fxG.createRadialGradient(cx,cy,R*0.45,cx,cy,R); vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,`rgba(0,0,0,${0.35*k})`); fxG.fillStyle=vg; fxG.fillRect(0,0,W,H); }
 
+/* ================= detailed mode entry ================= */
+async function enterOSM(preset){
+  const c=preset==='kanjo'?{lon:135.505,lat:34.684}:{lon:car.lon,lat:car.lat};
+  panel.hidden=true; holdEl.textContent='OpenStreetMapから車線・ランプ・高架のデータを読み込み中…'; holdEl.hidden=false; const prevMode=MODE_OSM;
+  let data; try{ data=await fetchOSM(c.lat-0.085,c.lon-0.105,c.lat+0.085,c.lon+0.105); }
+  catch(err){ holdEl.hidden=true; holdEl.textContent='地形・航空写真を読み込み中…'; toast('OpenStreetMapのデータを取得できませんでした。少し時間をおいてもう一度試してください。',5000); return; }
+  const st=buildOSMNetwork(data); MODE_OSM=true;
+  if(!E.length){ holdEl.hidden=true; toast('この周辺には高速道路のデータがありませんでした。',4000); location.reload(); return; }
+  let best=null,bd=1e18; const k=Math.cos(c.lat*D2R);
+  for(const e of E){ if(preset==='kanjo'&&(!/1号環状線/.test(e.name)||e.link)) continue; if(preset!=='kanjo'&&e.link) continue;
+    for(let i=0;i<e.lon.length;i++){ const dx=(e.lon[i]-c.lon)*k, dy=e.lat[i]-c.lat; const d=dx*dx+dy*dy; if(d<bd){bd=d;best={e,s:e.cum[i]};} } }
+  if(!best) best={e:E[0],s:0};
+  $('yearBlk').hidden=true; $('bOsmOff').hidden=false; $('osmCredit').hidden=false; YEAR=2024;
+  spawn(best.e,best.s,1); car.v=car.target=60/3.6; car.cruise=true; TRAFFIC_N=Math.min(TRAFFIC_N,14); renderTraffic();
+  holdEl.textContent='地形・航空写真を読み込み中…'; holdEl.hidden=true;
+  toast(`詳細モード：道路 ${st.edges} 区間・出口/分岐 ${st.exits} か所。←→で車線変更、出口は出口車線から。`,5200);
+}
+$('bKanjo').addEventListener('click',()=>{ if(MODE_OSM){ location.hash='kanjo'; location.reload(); } else enterOSM('kanjo'); });
+$('bOsmHere').addEventListener('click',()=>{ if(!MODE_OSM) enterOSM('here'); else { toast('いったん全国モードに戻ってから、行きたい場所で読み込んでください。',3500); } });
+$('bOsmOff').addEventListener('click',()=>{ location.hash=''; location.reload(); });
+
 /* ================= main loop ================= */
 let last=performance.now(), acc=0, roadT=0, miniT=0, hudT=0;
 const tmpV=new THREE.Vector3(), la=new THREE.Vector3();
@@ -1321,11 +1524,11 @@ function frame(t){
   // camera
   sampleAt(car.e,car.s,tmpS); const hx=tmpS.hx*car.dir, hz=tmpS.hz*car.dir; car.hx=hx; car.hz=hz;
   const lx=hz, lz=-hx;
-  const x=LX(tmpS.lon)+lx*car.latOff, z=LZ(tmpS.lat)+lz*car.latOff, y=roadY(tmpS.lon,tmpS.lat);
+  const cLat=car.latOff+offAtS(car.e,car.s); const x=LX(tmpS.lon)+lx*cLat, z=LZ(tmpS.lat)+lz*cLat, y=roadY(tmpS.lon,tmpS.lat)+tmpS.lev;
   // look target 28 m ahead along path
-  const w={e:car.e,s:car.s,dir:car.dir}; advance(w,28,opts=>{const node=w.dir>0?w.e.b:w.e.a;return (car.pickNode===node?opts.find(o=>o.e===car.pick):null)||defaultPick(w.e,opts);});
+  const w={e:car.e,s:car.s,dir:car.dir,latOff:car.latOff}; advance(w,28,opts=>{ if(MODE_OSM){ return osmChooseByLane(opts,w,true); } const node=w.dir>0?w.e.b:w.e.a;return (car.pickNode===node?opts.find(o=>o.e===car.pick):null)||defaultPick(w.e,opts);});
   sampleAt(w.e,w.s,tmpS2); const thx=tmpS2.hx*w.dir, thz=tmpS2.hz*w.dir;
-  const tx=LX(tmpS2.lon)+thz*car.latOff, tz=LZ(tmpS2.lat)-thx*car.latOff, ty=REAL?(realRoadY(tmpS2.lon,tmpS2.lat)??y):baseH(tmpS2.lon,tmpS2.lat);
+  const tLat=(MODE_OSM?w.latOff:car.latOff)+offAtS(w.e,w.s); const tx=LX(tmpS2.lon)+thz*tLat, tz=LZ(tmpS2.lat)-thx*tLat, ty=(REAL?(realRoadY(tmpS2.lon,tmpS2.lat)??y):baseH(tmpS2.lon,tmpS2.lat))+tmpS2.lev;
   if(!view.dragging) view.yaw*=Math.pow(0.1,dt);
   let fx=tx-x, fz=tz-z; const fl=Math.hypot(fx,fz)||1; fx/=fl; fz/=fl;
   const cy=Math.cos(view.yaw), sy=Math.sin(view.yaw); const dx=fx*cy+fz*sy, dz=-fx*sy+fz*cy;
@@ -1357,6 +1560,7 @@ function frame(t){
   renderer.render(scene,camera);
 }
 
+window.__nhd={get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork};
 /* ================= boot ================= */
 (async function boot(){
   const j=JOINTS.find(j=>j.name==='吹田JCT'&&validJ(j));
@@ -1381,7 +1585,8 @@ function frame(t){
     const t0=performance.now(); while(rtiles.size<9 && performance.now()-t0<8000){ updateRealTiles(30,2); await new Promise(r=>setTimeout(r,80)); }
   }
   car.v=car.target=90/3.6; car.cruise=true;
-  renderSpeeds(); renderModes(); renderTraffic(); $('boot').hidden=true; if(REAL) updateWhere(true); toast(COARSE?'▲■で加減速、◀▶で車線変更と分岐の選択。「地図・設定」で出発地・年・時刻を変更':'↑↓で加減速、←→で車線変更と分岐の選択。M で地図・年・時刻',4200);
+  renderSpeeds(); renderModes(); renderTraffic(); $('boot').hidden=true; if(REAL) updateWhere(true);
+  if(location.hash==='#kanjo') enterOSM('kanjo'); toast(COARSE?'▲■で加減速、◀▶で車線変更と分岐の選択。「地図・設定」で出発地・年・時刻を変更':'↑↓で加減速、←→で車線変更と分岐の選択。M で地図・年・時刻',4200);
   requestAnimationFrame(frame);
 })();
 </script>
