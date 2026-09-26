@@ -974,7 +974,7 @@ async function overpass(q,key){
 }
 const LEVEL_H=6.5;
 const N06J=(window.ROAD_DATA.joints||[]).filter(j=>j[1]===1||j[1]===2).map(j=>({name:window.ROAD_DATA.names[j[0]],lon:j[7]/1e5,lat:j[8]/1e5}));
-function osmLevel(t){ let L=parseFloat(t.layer); if(!isFinite(L)) L=0; const br=t.bridge&&t.bridge!=='no', tu=t.tunnel&&t.tunnel!=='no';
+function osmLevel(t){ let L=parseFloat(t.layer); if(!isFinite(L)) L=0; const passage=t.tunnel==='building_passage'||t.covered==='yes'; const br=(t.bridge&&t.bridge!=='no')||passage, tu=t.tunnel&&t.tunnel!=='no'&&!passage;
   if(tu) return Math.min(L,-1); if(br&&L<1) L=1; return L; }
 function osmLanes(t){ let n=parseInt(t.lanes,10); if(!(n>0)) n=/link/.test(t.highway||'')?1:2; return Math.min(n,6); }
 const laneW=e=>e.lanes*3.5;
