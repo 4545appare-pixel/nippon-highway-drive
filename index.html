@@ -462,7 +462,7 @@ function buildChunk(e,ci){
   if(REAL){
     const raw=[]; for(let j=0;j<n;j++) raw.push(G[j]-Y[j]>TUN);
     for(let j=0;j<n;j++){ let t=false; for(let k=Math.max(0,j-4);k<=Math.min(n-1,j+4);k++) if(raw[k]) t=true; tun.push(t); }
-    const W=hw+0.6; const prof=[[W,0],[W,4.6],[W*0.72,7.0],[0,8.0],[-W*0.72,7.0],[-W,4.6],[-W,0]];
+    const W=hw+0.6, WR=hw+7; const prof=[[W,0],[W,4.6],[W*0.72,7.0],[0,8.0],[-W*0.72,7.0],[-W,4.6],[-W,0]];
     for(let j=0;j<n;j++){ if(!tun[j]) continue;
       if(j<n-1 && tun[j+1]){ const b=tub.length/3; for(const [o,hh] of prof) tub.push(X[j]+NX[j]*o,Y[j]+hh,Z[j]+NZ[j]*o); for(const [o,hh] of prof) tub.push(X[j+1]+NX[j+1]*o,Y[j+1]+hh,Z[j+1]+NZ[j+1]*o);
         const P2=prof.length; for(let q=0;q<P2-1;q++){ tIdx.push(b+q,b+P2+q,b+q+1, b+q+1,b+P2+q,b+P2+q+1); } }
@@ -649,7 +649,9 @@ function terrainGeo(z,x,y,N,carve){
   for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){
     const lon=x2lon(x+i/N,z), lat=y2lat(y+j/N,z); let h=(demSample(z===FZ?FZ:14,lon,lat)||0)-(z===FZ?6:0);
     if(carve){ const [d,hw]=roadDistN(lon,lat,hw_cap); if(d<hw_cap){ const ry=realRoadY(RD_LON,RD_LAT); if(ry!==null){ const depth=h-ry;
-      if(depth<=TUN){ const flat=hw+9; if(d<flat){ if(depth>-0.5) h=ry-0.5; } else { const cut=ry-0.5+(d-flat)*0.9; if(h>cut) h=Math.min(h,cut); } } } } }
+      const flat=hw+(depth<=TUN?9:6);
+      if(d<flat){ if(depth>-0.5) h=ry-0.5; }
+      else if(depth<=TUN){ const cut=ry-0.5+(d-flat)*0.9; if(h>cut) h=cut; } } } }
     const v=j*(N+1)+i; pos[v*3]=LX(lon); pos[v*3+1]=h; pos[v*3+2]=LZ(lat); uv[v*2]=i/N; uv[v*2+1]=1-j/N;
     if(i<N&&j<N){const a=v,b=v+1,c=v+N+1,d2=v+N+2; idx.push(a,c,b,b,c,d2);}
   }
@@ -668,7 +670,8 @@ function plantTrees(t,tex){
   let seed=(t.x*73856093)^(t.y*19349663); const rnd=()=>{seed=(seed*1664525+1013904223)|0;return (seed>>>0)/4294967296;};
   const pts=[];
   for(let k=0;k<700&&pts.length<260;k++){ const u=rnd(), v=rnd(); const px=Math.floor(u*511), py=Math.floor(v*511); const o=(py*512+px)*4; const r=d[o],gg=d[o+1],b=d[o+2];
-    if(!(gg>r*1.04&&gg>=b&&r+gg+b<300&&r+gg+b>60)) continue;
+    if(!(gg>r*1.12&&gg>b*1.08&&r+gg+b<260&&r+gg+b>60)) continue;
+    let veg=0; for(const [ox,oy] of [[-6,0],[6,0],[0,-6],[0,6]]){ const qx=Math.max(0,Math.min(511,px+ox)), qy=Math.max(0,Math.min(511,py+oy)); const q=(qy*512+qx)*4; if(d[q+1]>d[q]*1.08&&d[q+1]>d[q+2]) veg++; } if(veg<3) continue;
     const lon=x2lon(t.x+u,NZ), lat=y2lat(t.y+v,NZ); const [dd,hw]=roadDistN(lon,lat,60); if(dd<hw+12) continue;
     const h=demAt(lon,lat); if(h===null||h<=0.3) continue; pts.push([LX(lon),h,LZ(lat),0.55+rnd()*0.7,r,gg,b,rnd()]); }
   if(!pts.length) return;
@@ -690,7 +693,7 @@ function updateRealTiles(budgetMs,syncR=0){
   for(const [x,y,d2] of want){ const k=x*1e6+y; keep.add(k); let t=rtiles.get(k);
     if(!t){ if(performance.now()-t0>budgetMs && d2>syncR*syncR) continue; t=buildRealTile(x,y); if(!t) continue; terrGroup.add(t.g); rtiles.set(k,t); }
     const hi=Math.max(Math.abs(x-tx0),Math.abs(y-ty0))<=2; const tex=photoTex(NZ,x,y,hi); inUse.add(tex.k);
-    if(tex.st===1 && t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xffffff); t.m.material.needsUpdate=true; t.tk=tex.k; if(hi&&!t.trees){ plantTrees(t,tex); t.trees=true; } }
+    if(tex.st===1 && t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xb4b4b4); t.m.material.needsUpdate=true; t.tk=tex.k; if(hi&&!t.trees){ plantTrees(t,tex); t.trees=true; } }
     else if(tex.st!==1 && t.tk){ const lo=TEX.get(NZ+'/'+x+'/'+y); if(lo) inUse.add(lo.k); }
     if(t.tk) inUse.add(t.tk);
   }
@@ -699,7 +702,7 @@ function updateRealTiles(budgetMs,syncR=0){
   const fx=Math.floor(lon2x(car.lon,FZ)), fy=Math.floor(lat2y(car.lat,FZ)); const fkeep=new Set(); const FR=FAR_R;
   for(let dy=-FR;dy<=FR;dy++)for(let dx=-FR;dx<=FR;dx++){ if(dx*dx+dy*dy>FR*FR+1) continue; const x=fx+dx,y=fy+dy,k=x*1e6+y; fkeep.add(k); let t=ftiles.get(k);
     if(!t){ if(performance.now()-t0>budgetMs+4) continue; t=buildFarTile(x,y); if(!t) continue; terrGroup.add(t.g); ftiles.set(k,t); }
-    const tex=photoTex(FZ,x,y,false); inUse.add(tex.k); if(tex.st===1&&t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xffffff); t.m.material.needsUpdate=true; t.tk=tex.k; } }
+    const tex=photoTex(FZ,x,y,false); inUse.add(tex.k); if(tex.st===1&&t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xb4b4b4); t.m.material.needsUpdate=true; t.tk=tex.k; } }
   for(const [k,t] of ftiles){ if(!fkeep.has(k)){ disposeGroup(t.g); t.m.material.dispose(); terrGroup.remove(t.g); ftiles.delete(k);} }
   // far layer hides where near tiles are complete
   let nearOk=0; for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++) if(rtiles.has((tx0+dx)*1e6+ty0+dy)) nearOk++;
@@ -931,7 +934,7 @@ function updateSky(){
   tailMat.color.set(on?'#ff2a1a':'#5a0a0a'); headMat.color.set(on?'#fff6dc':'#9a9a8e');
   winMat.color.set(on?'#ffc873':'#1e2428');
   head.intensity=on?90:0;
-  renderer.toneMappingExposure=1.0+nightF*0.35;
+  renderer.toneMappingExposure=(REAL?0.9:1.0)+nightF*0.35;
   return sp;
 }
 
