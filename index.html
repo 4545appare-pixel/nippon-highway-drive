@@ -1597,7 +1597,7 @@ function frame(t){
   renderer.render(scene,camera);
 }
 
-window.__nhd={get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork};
+window.__nhd={get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork,chunks,camera,scene,renderer,updateRoads,roadGroup,terrGroup,roadY,O,LX,LZ,buildChunk};
 /* ================= boot ================= */
 (async function boot(){
   const j=JOINTS.find(j=>j.name==='吹田JCT'&&validJ(j));
