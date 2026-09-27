@@ -988,7 +988,7 @@ function osmLevel(t){ let L=parseFloat(t.layer); if(!isFinite(L)) L=0; const pas
   if(tu) return Math.min(L,-1); if(br&&L<1) L=1; return L; }
 function osmLanes(t){ let n=parseInt(t.lanes,10); if(!(n>0)) n=/link/.test(t.highway||'')?1:2; return Math.min(n,6); }
 const laneW=e=>e.lanes*3.5;
-function levAt(e,sr){ if(e.hs){ const c=e.cum; let lo=0,hi=c.length-1; if(sr<=0) return e.hs[0]; if(sr>=c[hi]) return e.hs[hi]; while(hi-lo>1){const md=(lo+hi)>>1; if(c[md]<=sr) lo=md; else hi=md;} const u=(sr-c[lo])/((c[hi]-c[lo])||1); return e.hs[lo]+(e.hs[hi]-e.hs[lo])*u; }
+function levAt(e,sr){ if(e.hs){ const c=e.hc||e.cum; let lo=0,hi=c.length-1; if(sr<=0) return e.hs[0]; if(sr>=c[hi]) return e.hs[hi]; while(hi-lo>1){const md=(lo+hi)>>1; if(c[md]<=sr) lo=md; else hi=md;} const u=(sr-c[lo])/((c[hi]-c[lo])||1); return e.hs[lo]+(e.hs[hi]-e.hs[lo])*u; }
   if(e.hT===undefined) return 0; const D=Math.min(e.len/2,180)||1;
   return e.hT+(e.hA-e.hT)*Math.max(0,1-sr/D)+(e.hB-e.hT)*Math.max(0,1-(e.len-sr)/D); }
 function offAtS(e,sp){ if(e.typ!==10) return 0; const P=path(e); const sr=sp/(P.ratio||1); const T=Math.min(160,e.len*0.45)||1;
@@ -1006,6 +1006,54 @@ function ptAlong(e,d,fromEnd){ const s=fromEnd?Math.max(0,e.len-d):Math.min(e.le
 function rawHeading(e,atEnd){ const p=atEnd?ptAlong(e,25,true):[e.lon[0],e.lat[0]], q=atEnd?[e.lon[e.lon.length-1],e.lat[e.lat.length-1]]:ptAlong(e,25,false);
   const k=Math.cos(p[1]*D2R)*111320; let x=(q[0]-p[0])*k, z=-(q[1]-p[1])*KY; const l=Math.hypot(x,z)||1; return [x/l,z/l]; }
 const shortRoute=n=>(n||'').replace(/^阪神高速|^首都高速|^名古屋高速|^福岡高速|^北九州高速|^広島高速/,'').replace(/^\d+号/,m=>m);
+
+/* heights: flat decks, rise only where one road must pass over another, gentle grades */
+function computeHeights(nodes,edges,inc){
+  const GM=0.03, GL=0.06, BR=8, TU=-9, SP=25;
+  let nv=nodes.length; const lonA=[],latA=[]; for(const p of nodes){ lonA.push(p[0]); latA.push(p[1]); }
+  for(const e of edges){ const L=e.len, m=Math.max(1,Math.ceil(L/SP)); const hc=new Float64Array(m+1), ids=new Int32Array(m+1); let k=0;
+    for(let i=0;i<=m;i++){ const sr=L*i/m; hc[i]=sr;
+      if(i===0) ids[i]=e.a; else if(i===m) ids[i]=e.b;
+      else { while(k<e.cum.length-2&&e.cum[k+1]<sr) k++; const d=e.cum[k+1]-e.cum[k]; const u=d>0?(sr-e.cum[k])/d:0; lonA.push(e.lon[k]+(e.lon[k+1]-e.lon[k])*u); latA.push(e.lat[k]+(e.lat[k+1]-e.lat[k])*u); ids[i]=nv++; } }
+    e.hc=hc; e._ids=ids; }
+  const bOf=e=>e.level>0?BR:(e.level<0?TU:0);
+  const h=new Float32Array(nv);
+  for(const e of edges){ const b=bOf(e), ids=e._ids; for(let i=1;i<ids.length-1;i++) h[ids[i]]=b; }
+  for(let v=0;v<nodes.length;v++){ const es=inc[v]; const main=es.filter(e=>!e.link); const src=main.length?main:es; h[v]=src.length?Math.max(...src.map(bOf)):0; }
+  const adj=Array.from({length:nv},()=>[]);
+  for(const e of edges){ const g=e.link?GL:GM, ids=e._ids, hc=e.hc; for(let i=0;i<ids.length-1;i++){ const w=(hc[i+1]-hc[i])*g; adj[ids[i]].push(ids[i+1],w); adj[ids[i+1]].push(ids[i],w); } }
+  // grade-separated crossings: segments of different layers that intersect without sharing a node
+  const segs=[]; for(const e of edges){ const ids=e._ids; for(let i=0;i<ids.length-1;i++) segs.push([ids[i],ids[i+1],e]); }
+  const grid=new Map(), C=2000;
+  segs.forEach((sg,si)=>{ const a=sg[0],b=sg[1]; const x0=Math.floor(Math.min(lonA[a],lonA[b])*C),x1=Math.floor(Math.max(lonA[a],lonA[b])*C),y0=Math.floor(Math.min(latA[a],latA[b])*C),y1=Math.floor(Math.max(latA[a],latA[b])*C);
+    for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++){ const kk=x*1e6+y; let l=grid.get(kk); if(!l) grid.set(kk,l=[]); l.push(si); } });
+  const cons=[], seen=new Set();
+  for(const l of grid.values()) for(let i=0;i<l.length;i++) for(let j=i+1;j<l.length;j++){
+    const A=segs[l[i]], Bs=segs[l[j]]; if(A[2]===Bs[2]||A[2].level===Bs[2].level) continue;
+    const key=Math.min(l[i],l[j])*1e6+Math.max(l[i],l[j]); if(seen.has(key)) continue; seen.add(key);
+    const a0=A[0],a1=A[1],b0=Bs[0],b1=Bs[1]; if(a0===b0||a0===b1||a1===b0||a1===b1) continue;
+    const kc=Math.cos(latA[a0]*D2R);
+    const rx=(lonA[a1]-lonA[a0])*kc, ry=latA[a1]-latA[a0], sx=(lonA[b1]-lonA[b0])*kc, sy=latA[b1]-latA[b0], qx=(lonA[b0]-lonA[a0])*kc, qy=latA[b0]-latA[a0];
+    const den=rx*sy-ry*sx; if(Math.abs(den)<1e-14) continue;
+    const t=(qx*sy-qy*sx)/den, u=(qx*ry-qy*rx)/den; if(t<=0||t>=1||u<=0||u>=1) continue;
+    const aUp=A[2].level>Bs[2].level; const U=aUp?A:Bs, Lo=aUp?Bs:A, tu=aUp?t:u, tl=aUp?u:t; const dl=Math.abs(A[2].level-Bs[2].level);
+    cons.push({ua:U[0],ub:U[1],ut:tu,la:Lo[0],lb:Lo[1],lt:tl,gap:6.8+Math.min(2,dl-1)*1.2,lv:Lo[2].level}); }
+  cons.sort((a,b)=>a.lv-b.lv);
+  // max-plus / min-plus propagation (keeps every slope within the grade limit)
+  const heap=(cmp)=>{ const a=[]; return { get size(){return a.length;}, push(x){ a.push(x); let i=a.length-1; while(i>0){ const p=(i-1)>>1; if(cmp(a[i],a[p])<0){ [a[i],a[p]]=[a[p],a[i]]; i=p; } else break; } },
+    pop(){ const top=a[0], last=a.pop(); if(a.length){ a[0]=last; let i=0; for(;;){ const l2=2*i+1, r2=l2+1; let m=i; if(l2<a.length&&cmp(a[l2],a[m])<0) m=l2; if(r2<a.length&&cmp(a[r2],a[m])<0) m=r2; if(m===i) break; [a[i],a[m]]=[a[m],a[i]]; i=m; } } return top; } }; };
+  const envUp=()=>{ const H=heap((x,y)=>y[0]-x[0]); for(let v=0;v<nv;v++) H.push([h[v],v]);
+    while(H.size){ const [hv,v]=H.pop(); if(hv<h[v]-1e-6) continue; const a=adj[v]; for(let q=0;q<a.length;q+=2){ const c=hv-a[q+1]; if(c>h[a[q]]+1e-4){ h[a[q]]=c; H.push([c,a[q]]); } } } };
+  const envDown=()=>{ const H=heap((x,y)=>x[0]-y[0]); for(let v=0;v<nv;v++) if(h[v]<0) H.push([h[v],v]);
+    while(H.size){ const [hv,v]=H.pop(); if(hv>h[v]+1e-6) continue; const a=adj[v]; for(let q=0;q<a.length;q+=2){ const c=hv+a[q+1]; if(c<h[a[q]]-1e-4){ h[a[q]]=c; H.push([c,a[q]]); } } } };
+  const enforce=()=>{ for(const c of cons){ const hu=h[c.ua]*(1-c.ut)+h[c.ub]*c.ut, hl=h[c.la]*(1-c.lt)+h[c.lb]*c.lt; const need=hl+c.gap; if(hu<need){ const d=need-hu; h[c.ua]+=d; h[c.ub]+=d; } } };
+  for(let r=0;r<5;r++){ enforce(); envUp(); envDown(); }
+  enforce(); envUp();
+  // round off the kinks at the top and bottom of each slope
+  for(let it=0;it<6;it++){ const h2=Float32Array.from(h); for(let v=0;v<nv;v++){ const a=adj[v]; if(!a.length) continue; let sm=0,n2=0; for(let q=0;q<a.length;q+=2){ sm+=h[a[q]]; n2++; } h2[v]=0.5*h[v]+0.5*sm/n2; } h.set(h2); }
+  for(const e of edges){ e.hs=Float32Array.from(e._ids,v=>h[v]); delete e._ids; }
+  window.__heights={crossings:cons.length,vertices:nv};
+}
 function buildOSMNetwork(data){
   const ways=[];
   for(const el of data.elements){ if(el.type!=='way'||!el.geometry||!el.nodes||el.nodes.length<2||el.geometry.length!==el.nodes.length) continue;
@@ -1034,15 +1082,7 @@ function buildOSMNetwork(data){
     else if(es.length===1) nh[v]=Math.min(0,es[0].level)*LEVEL_H;
     else nh[v]=es.reduce((a,e)=>a+e.level,0)/es.length*LEVEL_H; }
   for(const e of edges){ e.hA=nh[e.a]; e.hB=nh[e.b]; e.hT=e.level*LEVEL_H; }
-  { let nv=nodes.length; for(const e of edges){ const n=e.lon.length, ids=new Int32Array(n); ids[0]=e.a; ids[n-1]=e.b; for(let k=1;k<n-1;k++) ids[k]=nv++; e._v=ids; }
-    const tgt=new Float32Array(nv), lam=new Float32Array(nv), h=new Float32Array(nv), fixed=new Uint8Array(nv); const nb=Array.from({length:nv},()=>[]);
-    for(let v=0;v<nodes.length;v++){ tgt[v]=nh[v]; lam[v]=0.02; if(inc[v].length===1&&inc[v][0].link&&inc[v][0].level<=0) fixed[v]=1; }
-    for(const e of edges){ const L=e.level*LEVEL_H, ids=e._v; for(let k=1;k<ids.length-1;k++){ tgt[ids[k]]=L; lam[ids[k]]=e.link?0.002:0.012; }
-      for(let k=0;k<ids.length-1;k++){ const w=1/Math.max(4,e.cum[k+1]-e.cum[k]); nb[ids[k]].push(ids[k+1],w); nb[ids[k+1]].push(ids[k],w); } }
-    // densify long gaps so the smoothing has enough points to bend over
-    h.set(tgt);
-    for(let it=0;it<420;it++){ for(let v=0;v<nv;v++){ if(fixed[v]) continue; const a=nb[v]; if(!a.length) continue; let sw=0,sh=0; for(let q=0;q<a.length;q+=2){ sw+=a[q+1]; sh+=a[q+1]*h[a[q]]; } const l=lam[v]*sw/ (a.length/2); h[v]=(sh+l*tgt[v]*(a.length/2))/(sw+l*(a.length/2)); } }
-    for(const e of edges){ e.hs=Float32Array.from(e._v,v=>h[v]); delete e._v; } }
+  computeHeights(nodes,edges,inc);
   // lane arrangement at diverges and merges
   const pickMain=(list,ref)=>{ const cand=list.slice().sort((p,q)=>(p.link-q.link)||((q.name===ref.name)-(p.name===ref.name))||(q.lanes-p.lanes)); return cand[0]; };
   const exits=[];
