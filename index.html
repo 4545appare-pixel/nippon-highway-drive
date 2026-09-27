@@ -505,7 +505,7 @@ function buildChunk(e,ci){
   const box=(arr,idx,x,y,z,sx,sy,sz)=>{const b=arr.length/3;for(const dx of[-sx,sx])for(const dy of[0,sy])for(const dz of[-sz,sz])arr.push(x+dx,y+dy,z+dz);
     idx.push(b,b+1,b+3,b,b+3,b+2, b+4,b+6,b+7,b+4,b+7,b+5, b,b+4,b+5,b,b+5,b+1, b+2,b+3,b+7,b+2,b+7,b+6, b,b+2,b+6,b,b+6,b+4, b+1,b+5,b+7,b+1,b+7,b+3);};
   const spacing = urban?50:(c.div?100:0);
-  if(spacing){for(let j=0;j<n;j++){ if(Math.floor(S[j]/spacing)!==Math.floor((S[j]-STEP)/spacing)&&j>0){
+  if(spacing){for(let j=0;j<n;j++){ if(e.typ===10&&(e.link||e.decel||e.accel||e.gore||e.goreEnd)&&(S[j]<200||S[j]>P.len-260)) continue; if(Math.floor(S[j]/spacing)!==Math.floor((S[j]-STEP)/spacing)&&j>0){
     const px=c.div?X[j]:X[j]+NX[j]*(hw+0.8), pz=c.div?Z[j]:Z[j]+NZ[j]*(hw+0.8);
     // pole with a curved arm reaching over the carriageway
     const arm=(bx,bz,y0,dx,dz)=>{ for(let k=1;k<=4;k++) box(poles,pIdx,bx+dx*k*0.55,y0+Math.min(0.4,k*0.13),bz+dz*k*0.55,0.07,0.1,0.07); box(lamps,lIdx,bx+dx*2.4,y0+0.32,bz+dz*2.4,0.48,0.13,0.22); };
