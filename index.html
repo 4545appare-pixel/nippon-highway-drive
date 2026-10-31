@@ -1249,15 +1249,16 @@ const beamMat=new THREE.MeshLambertMaterial({color:0x8a9096});
 let tallTry=0, lmT=0; let TALL=[], tallAt=null, tallBusy=false, tallDirty=false; const TGRID=new Map(); const tallGroup=new THREE.Group(); scene.add(tallGroup);
 const tallMat=curvePatch(new THREE.MeshLambertMaterial({side:THREE.DoubleSide,vertexColors:true,map:bldMat.map,emissiveMap:bldMat.emissiveMap,emissive:0xffffff,emissiveIntensity:0}),'tall',null,false);
 let SKY=[], skyAt=null, skyBusy=false;
-async function updateSkyline(){ if(!REAL||skyBusy) return; if(skyAt&&segLen(car.lon,car.lat,skyAt.lon,skyAt.lat)<12000) return; skyBusy=true; const c={lon:+car.lon.toFixed(1),lat:+car.lat.toFixed(1)};
+let skyRetry=0, tallRetry=0;
+async function updateSkyline(){ if(!REAL||skyBusy||Date.now()<skyRetry) return; if(skyAt&&segLen(car.lon,car.lat,skyAt.lon,skyAt.lat)<12000) return; skyBusy=true; const c={lon:+car.lon.toFixed(1),lat:+car.lat.toFixed(1)};
   const bb=`${(c.lat-0.27).toFixed(2)},${(c.lon-0.33).toFixed(2)},${(c.lat+0.27).toFixed(2)},${(c.lon+0.33).toFixed(2)}`;
   const q=`[out:json][timeout:60];way["building"]["height"](if:number(t["height"])>=110)(${bb});out geom tags;`;
   try{ const j=await overpass(q,'https://cache.local/sky/'+bb); const out=[]; for(const el of j.elements){ if(el.type!=='way'||!el.geometry||el.geometry.length<4) continue; const t=el.tags||{}; const h=parseFloat(t.height); if(!(h>=110)) continue;
       const outer=el.geometry.map(p=>[p.lon,p.lat]); let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; for(const q2 of outer){x0=Math.min(x0,q2[0]);x1=Math.max(x1,q2[0]);y0=Math.min(y0,q2[1]);y1=Math.max(y1,q2[1]);}
       out.push({id:el.id,outer,h,minH:parseFloat(t.min_height)||0,name:t.name||'',bb:[x0,y0,x1,y1],col:t['building:colour']||t['building:color']||'',far:true}); }
-    SKY=out; skyAt=c; tallDirty=true; }catch(err){} skyBusy=false; }
+    SKY=out; skyAt=c; tallDirty=true; }catch(err){ skyRetry=Date.now()+60000; } skyBusy=false; }
 async function updateTall(force){
-  if(!REAL||tallBusy) return; if(!force&&tallAt&&segLen(car.lon,car.lat,tallAt.lon,tallAt.lat)<5000) return;
+  if(!REAL||tallBusy||Date.now()<tallRetry) return; if(!force&&tallAt&&segLen(car.lon,car.lat,tallAt.lon,tallAt.lat)<5000) return;
   tallBusy=true; const c={lon:+car.lon.toFixed(2),lat:+car.lat.toFixed(2)}; const s=c.lat-0.06,n=c.lat+0.06,w=c.lon-0.07,e=c.lon+0.07;
   const bb=`${s.toFixed(3)},${w.toFixed(3)},${n.toFixed(3)},${e.toFixed(3)}`;
   const q=`[out:json][timeout:60];(way["building"](if:number(t["height"])>=28||number(t["building:levels"])>=9)(${bb});way["building"]["name"]["height"](${bb});way["man_made"="tower"]["height"](${bb}););out geom tags;`;
@@ -1269,7 +1270,7 @@ async function updateTall(force){
     TALL=out; tallAt=c; TGRID.clear();
     for(let i=0;i<TALL.length;i++){ const b=TALL[i].bb; for(let gx2=Math.floor(b[0]*500);gx2<=Math.floor(b[2]*500);gx2++) for(let gy2=Math.floor(b[1]*500);gy2<=Math.floor(b[3]*500);gy2++){ const k=gx2*1e6+gy2; let l=TGRID.get(k); if(!l) TGRID.set(k,l=[]); l.push(i); } }
     rebuildTall(); for(const t of rtiles.values()){ if(t.bld&&t.bldMesh){ t.g.remove(t.bldMesh); t.bldMesh.geometry.dispose(); t.bldMesh=null; t.bld=false; } }
-  }catch(err){} tallBusy=false; }
+  }catch(err){ tallRetry=Date.now()+60000; } tallBusy=false; }
 function inPoly(p,poly){ let ins=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const a=poly[i],b=poly[j]; if(((a[1]>p[1])!==(b[1]>p[1]))&&(p[0]<(b[0]-a[0])*(p[1]-a[1])/((b[1]-a[1])||1e-12)+a[0])) ins=!ins; } return ins; }
 function insideTall(lon,lat){ const l=TGRID.get(Math.floor(lon*500)*1e6+Math.floor(lat*500)); if(!l) return false; for(const i of l) if(inPoly([lon,lat],TALL[i].outer)) return true; return false; }
 function rebuildTall(){
