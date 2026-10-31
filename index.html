@@ -695,7 +695,7 @@ function updateTiles(budgetMs,syncR=0){
   for(const [tx,ty] of want){ const k=tx*100000+ty; keep.add(k); if(tiles.has(k)) continue; if(performance.now()-t0>budgetMs && (tx-tx0)**2+(ty-ty0)**2>syncR*syncR) continue; const t=buildTile(tx,ty); terrGroup.add(t.g); tiles.set(k,t); }
   for(const [k,t] of tiles){ if(!keep.has(k)){ disposeGroup(t.g); terrGroup.remove(t.g); tiles.delete(k);} }
 }
-function clearWorld(){ clearReal(); tallDirty=true; for(const [k,c] of chunks){disposeGroup(c.g);roadGroup.remove(c.g);} chunks.clear(); for(const [k,t] of tiles){disposeGroup(t.g);terrGroup.remove(t.g);} tiles.clear(); }
+function clearWorld(){ clearReal(); clearLandmarks(); tallDirty=true; for(const [k,c] of chunks){disposeGroup(c.g);roadGroup.remove(c.g);} chunks.clear(); for(const [k,t] of tiles){disposeGroup(t.g);terrGroup.remove(t.g);} tiles.clear(); }
 
 /* ================= GSI real terrain (地理院タイル) ================= */
 const GSI='https://cyberjapandata.gsi.go.jp/xyz/';
@@ -786,7 +786,7 @@ function ensureProfile(lon,lat){ if(profBusy) return profBusy;
     const loc=new Int32Array(PNV).fill(-1), vs=[];
     for(let cx=Math.floor((lon-dLon)*20);cx<=Math.floor((lon+dLon)*20);cx++) for(let cy=Math.floor((lat-dLat)*20);cy<=Math.floor((lat+dLat)*20);cy++){ const l=PGRID.get(cx*4096+cy); if(!l) continue; for(const v of l){ if(segLen(lon,lat,PLON[v],PLAT[v])<=R){ loc[v]=vs.length; vs.push(v); } } }
     const nv=vs.length; if(!nv) return; const raw=new Float64Array(nv), fixed=new Uint8Array(nv), out=new Float64Array(nv);
-    for(let i=0;i<nv;i++){ const v=vs[i]; let g0=demSample(11,PLON[v],PLAT[v]); if(g0===null||g0<=0.3) g0=12; raw[i]=g0; if(PST[v]===2){ fixed[i]=1; out[i]=PH[v]; } }
+    for(let i=0;i<nv;i++){ const v=vs[i]; let g0=demSample(11,PLON[v],PLAT[v]); if(g0===null||g0<=0.3) g0=12; raw[i]=g0; if(PST[v]===2){ fixed[i]=1; out[i]=PH[v]; } else { const bd=bridgeDeck(PLON[v],PLAT[v]); if(bd!==null){ fixed[i]=1; out[i]=bd; } } }
     const EI=[],EJ=[],EW=[]; for(let q=0;q<PEI.length;q++){ const a=loc[PEI[q]], b=loc[PEJ[q]]; if(a>=0&&b>=0){ EI.push(a); EJ.push(b); EW.push(PEW[q]); } }
     fitProfile(nv,Int32Array.from(EI),Int32Array.from(EJ),Float64Array.from(EW),raw,fixed,out);
     for(let i=0;i<nv;i++){ const v=vs[i]; if(PST[v]===2) continue; PH[v]=Math.max(1.5,out[i]); PST[v]=segLen(lon,lat,PLON[v],PLAT[v])<=RIN?2:1; }
@@ -814,20 +814,21 @@ function evictTex(inUse){ if(TEX.size<260) return; const arr=[...TEX.values()].f
   for(const t of arr.slice(0,TEX.size-220)){ if(t.tex) t.tex.dispose(); TEX.delete(t.k);} }
 
 // near tiles (z15) and far tiles (z12)
-const NZ=15, FZ=12; const BLD_R=COARSE?1:2; const NEAR_N=COARSE?40:56, FAR_N=40; let NEAR_R=COARSE?4:5, FAR_R=COARSE?2:3;
+const NZ=15, FZ=12, HZ=9; const HOR_R=HQ?2:1; const htiles=new Map(); const BLD_R=COARSE?1:2; const NEAR_N=COARSE?40:56, FAR_N=40; let NEAR_R=COARSE?4:5, FAR_R=COARSE?2:3;
 const rtiles=new Map(), ftiles=new Map();
-const farU={uCar:{value:new THREE.Vector3()},uR:{value:3800}};
-function farPatch(m){ m.onBeforeCompile=sh=>{ sh.uniforms.uCar=farU.uCar; sh.uniforms.uR=farU.uR;
-  sh.vertexShader='varying vec3 vW;\n'+sh.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\n vW=(modelMatrix*vec4(transformed,1.)).xyz;');
-  sh.fragmentShader='uniform vec3 uCar;uniform float uR;varying vec3 vW;\n'+sh.fragmentShader.replace('void main() {','void main() {\n if(distance(vW.xz,uCar.xz)<uR) discard;'); };
-  m.customProgramCacheKey=()=>'farTerrain'; return m; }
+const farU={uCar:{value:new THREE.Vector3()},uR:{value:3800},uR2:{value:20000},uSnow:{value:2800}};
+function curvePatch(m,key,discard,snow){ m.onBeforeCompile=sh=>{ sh.uniforms.uCar=farU.uCar; sh.uniforms.uSnow=farU.uSnow; if(discard) sh.uniforms.uDisc=farU[discard];
+    sh.vertexShader='uniform vec3 uCar;\nvarying vec3 vW;\n'+sh.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\n vW=(modelMatrix*vec4(transformed,1.)).xyz; { vec2 dd=vW.xz-uCar.xz; transformed.y-=dot(dd,dd)*6.83e-8; }');
+    sh.fragmentShader='uniform vec3 uCar;\nuniform float uSnow;\n'+(discard?'uniform float uDisc;\n':'')+'varying vec3 vW;\n'+sh.fragmentShader.replace('void main() {','void main() {\n'+(discard?' if(distance(vW.xz,uCar.xz)<uDisc) discard;\n':'')).replace('#include <map_fragment>','#include <map_fragment>\n'+(snow?' diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.93,.95,.98),smoothstep(uSnow-250.,uSnow+250.,vW.y));\n':''));
+  }; m.customProgramCacheKey=()=>key; return m; }
+function farPatch(m){ return curvePatch(m,'farTerrain','uR',true); }
 const tunnelMat=new THREE.MeshLambertMaterial({color:0x6b6a64,side:THREE.DoubleSide});
 const tlampMat=new THREE.MeshBasicMaterial({color:0xffd58a});
 const pierMat=new THREE.MeshLambertMaterial({color:0x9a9890});
 function terrainGeo(z,x,y,N,carve){
   const pos=new Float32Array((N+1)*(N+1)*3), uv=new Float32Array((N+1)*(N+1)*2); const idx=[];
   for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){
-    const lon=x2lon(x+i/N,z), lat=y2lat(y+j/N,z); let h=(demSample(z===FZ?FZ:14,lon,lat)||0)-(z===FZ?6:0);
+    const lon=x2lon(x+i/N,z), lat=y2lat(y+j/N,z); let h=(demSample(z===FZ?FZ:z===HZ?HZ:14,lon,lat)||0)-(z===FZ?6:z===HZ?14:0);
     if(carve){ const [d,hw]=roadDistN(lon,lat,hw_cap); if(d<hw_cap){ const ry=groundAt(E[RD_E],RD_SR,RD_LON,RD_LAT); if(ry!==null){ const depth=h-ry; const flat=hw+6;
       if(depth>TUN+6){ /* deep tunnel: the mountain stays */ }
       else if(d<flat){ if(depth>-6) h=ry-0.5; }
@@ -863,9 +864,13 @@ function plantTrees(t,tex){
   t.g.add(im); }
 function buildFarTile(x,y){
   const t=demTile(FZ,x,y); if(t.st===0) return null; if(demTile(FZ,x+1,y).st===0||demTile(FZ,x,y+1).st===0||demTile(FZ,x+1,y+1).st===0) return null;
-  const geo=terrainGeo(FZ,x,y,FAR_N,false); const mat=farPatch(new THREE.MeshLambertMaterial({color:0x6f7d68}));
+  const geo=terrainGeo(FZ,x,y,FAR_N,false); const mat=curvePatch(new THREE.MeshLambertMaterial({color:0x6f7d68}),'farTerrainS','uR',true);
   const m=new THREE.Mesh(geo,mat); m.matrixAutoUpdate=false; m.renderOrder=-0.5; const g=new THREE.Group(); g.add(m);
   return {g,m,x,y,tk:null}; }
+function buildHorizonTile(x,y){
+  for(const [dx,dy] of [[0,0],[1,0],[0,1],[1,1]]) if(demTile(HZ,x+dx,y+dy).st===0) return null;
+  const geo=terrainGeo(HZ,x,y,48,false); const mat=curvePatch(new THREE.MeshLambertMaterial({color:0x6f7d68}),'horizon','uR2',true);
+  const m=new THREE.Mesh(geo,mat); m.matrixAutoUpdate=false; m.renderOrder=-0.6; const g=new THREE.Group(); g.add(m); return {g,m,x,y,tk:null}; }
 function updateRealTiles(budgetMs,syncR=0){
   const t0=performance.now(); const inUse=new Set();
   const cx=lon2x(car.lon,NZ), cy=lat2y(car.lat,NZ), tx0=Math.floor(cx), ty0=Math.floor(cy);
@@ -888,12 +893,19 @@ function updateRealTiles(budgetMs,syncR=0){
     if(!t){ if(performance.now()-t0>budgetMs+4) continue; t=buildFarTile(x,y); if(!t) continue; terrGroup.add(t.g); ftiles.set(k,t); }
     const tex=photoTex(FZ,x,y,false); inUse.add(tex.k); if(tex.st===1&&t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xb4b4b4); t.m.material.needsUpdate=true; t.tk=tex.k; } }
   for(const [k,t] of ftiles){ if(!fkeep.has(k)){ disposeGroup(t.g); t.m.material.dispose(); terrGroup.remove(t.g); ftiles.delete(k);} }
+  // horizon layer: low-resolution terrain out to about 120 km
+  const hx=Math.floor(lon2x(car.lon,HZ)), hy=Math.floor(lat2y(car.lat,HZ)); const hkeep=new Set();
+  for(let dy=-HOR_R;dy<=HOR_R;dy++)for(let dx=-HOR_R;dx<=HOR_R;dx++){ const x=hx+dx,y=hy+dy,k=x*1e6+y; hkeep.add(k); let t=htiles.get(k);
+    if(!t){ if(performance.now()-t0>budgetMs+6) continue; t=buildHorizonTile(x,y); if(!t) continue; terrGroup.add(t.g); htiles.set(k,t); }
+    const tex=photoTex(HZ,x,y,0); inUse.add(tex.k); if(tex.st===1&&t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xb4b4b4); t.m.material.needsUpdate=true; t.tk=tex.k; } }
+  for(const [k,t] of htiles){ if(!hkeep.has(k)){ disposeGroup(t.g); t.m.material.dispose(); terrGroup.remove(t.g); htiles.delete(k);} }
+  farU.uR2.value=(FAR_R-0.7)*40075016*Math.cos(car.lat*D2R)/4096;
   // far layer hides where near tiles are complete
   let nearOk=0; for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++) if(rtiles.has((tx0+dx)*1e6+ty0+dy)) nearOk++;
   farU.uR.value = (NEAR_R-1.1)*1002*Math.cos(car.lat*D2R)/Math.cos(35*D2R);
   evictTex(inUse);
 }
-function clearReal(){ for(const [k,t] of rtiles){disposeGroup(t.g);t.m.material.dispose();terrGroup.remove(t.g);} rtiles.clear(); for(const [k,t] of ftiles){disposeGroup(t.g);t.m.material.dispose();terrGroup.remove(t.g);} ftiles.clear(); }
+function clearReal(){ for(const [k,t] of htiles){disposeGroup(t.g);t.m.material.dispose();terrGroup.remove(t.g);} htiles.clear(); for(const [k,t] of rtiles){disposeGroup(t.g);t.m.material.dispose();terrGroup.remove(t.g);} rtiles.clear(); for(const [k,t] of ftiles){disposeGroup(t.g);t.m.material.dispose();terrGroup.remove(t.g);} ftiles.clear(); }
 async function probeGSI(lon,lat){
   const t=demTile(14,Math.floor(lon2x(lon,14)),Math.floor(lat2y(lat,14)));
   const t0=performance.now(); while(t.st===0 && performance.now()-t0<7000) await new Promise(r=>setTimeout(r,100));
@@ -997,10 +1009,10 @@ function labelSprite(text,cat){
   const key=cat+':'+text; let mat=labelTexCache.get(key);
   if(!mat){ const c=document.createElement('canvas'); const g=c.getContext('2d'); const fs=42; g.font=`700 ${fs}px "BIZ UDPGothic","Hiragino Sans","Yu Gothic",sans-serif`;
     const w=Math.ceil(g.measureText(text).width)+34; c.width=w; c.height=64; const g2=c.getContext('2d'); g2.font=g.font;
-    g2.textBaseline='middle'; g2.lineJoin='round'; g2.lineWidth=9; g2.strokeStyle='rgba(8,14,12,.85)'; g2.strokeText(text,17,33); g2.fillStyle=cat===999?'#ffe2a8':'#f4f7f2'; g2.fillText(text,17,33);
+    g2.textBaseline='middle'; g2.lineJoin='round'; g2.lineWidth=9; g2.strokeStyle='rgba(8,14,12,.85)'; g2.strokeText(text,17,33); g2.fillStyle=cat===999?'#ffe2a8':cat===998?'#dff0ff':'#f4f7f2'; g2.fillText(text,17,33);
     const tex=new THREE.CanvasTexture(c); tex.colorSpace=THREE.SRGBColorSpace;
     mat=new THREE.SpriteMaterial({map:tex,depthTest:true,transparent:true,fog:false,sizeAttenuation:false}); mat.userData.aspect=w/64; labelTexCache.set(key,mat); }
-  const s=new THREE.Sprite(mat); const hgt=cat===999?0.05:0.042; s.scale.set(hgt*mat.userData.aspect,hgt,1); return s; }
+  const s=new THREE.Sprite(mat); const hgt=cat===999?0.05:cat===998?0.038:0.042; s.scale.set(hgt*mat.userData.aspect,hgt,1); return s; }
 let SHOW_LABELS=true;
 function buildLabels(t,bv){
   if(!bv.labels) return; const grp=new THREE.Group(); grp.userData.labels=true;
@@ -1082,7 +1094,8 @@ function computeHeights(nodes,edges,inc){
   const G=new Float64Array(nv);
   if(REAL){ const raw=new Float64Array(nv); for(let v=0;v<nv;v++){ let g0=demSample(11,lonA[v],latA[v]); if(g0===null||g0<=0.3) g0=3; raw[v]=g0; }
     const EI=[],EJ=[],EW=[]; for(const e of edges){ const ids=e._ids, hc=e.hc, g=e.link?0.06:0.04; for(let i=0;i<ids.length-1;i++){ EI.push(ids[i]); EJ.push(ids[i+1]); EW.push((hc[i+1]-hc[i])*g); } }
-    fitProfile(nv,Int32Array.from(EI),Int32Array.from(EJ),Float64Array.from(EW),raw,new Uint8Array(nv),G); for(let v=0;v<nv;v++) G[v]=Math.max(1,G[v]); }
+    const fx=new Uint8Array(nv); for(let v=0;v<nv;v++){ const bd=bridgeDeck(lonA[v],latA[v]); if(bd!==null){ fx[v]=1; G[v]=bd-8; } }
+    fitProfile(nv,Int32Array.from(EI),Int32Array.from(EJ),Float64Array.from(EW),raw,fx,G); for(let v=0;v<nv;v++) G[v]=Math.max(1,G[v]); }
   const bOf=e=>e.level>0?BR:(e.level<0?TU:0);
   const h=new Float32Array(nv);
   for(const e of edges){ const b=bOf(e), ids=e._ids; for(let i=1;i<ids.length-1;i++) h[ids[i]]=b; }
@@ -1233,8 +1246,16 @@ const gPlaneCache=new Map(); const gPlane=(w,h)=>{ const k=w.toFixed(1)+'x'+h; l
 const beamMat=new THREE.MeshLambertMaterial({color:0x8a9096});
 
 /* tall buildings & landmarks with real heights (OpenStreetMap) */
-let tallTry=0; let TALL=[], tallAt=null, tallBusy=false, tallDirty=false; const TGRID=new Map(); const tallGroup=new THREE.Group(); scene.add(tallGroup);
-const tallMat=new THREE.MeshLambertMaterial({side:THREE.DoubleSide,vertexColors:true,map:bldMat.map,emissiveMap:bldMat.emissiveMap,emissive:0xffffff,emissiveIntensity:0});
+let tallTry=0, lmT=0; let TALL=[], tallAt=null, tallBusy=false, tallDirty=false; const TGRID=new Map(); const tallGroup=new THREE.Group(); scene.add(tallGroup);
+const tallMat=curvePatch(new THREE.MeshLambertMaterial({side:THREE.DoubleSide,vertexColors:true,map:bldMat.map,emissiveMap:bldMat.emissiveMap,emissive:0xffffff,emissiveIntensity:0}),'tall',null,false);
+let SKY=[], skyAt=null, skyBusy=false;
+async function updateSkyline(){ if(!REAL||skyBusy) return; if(skyAt&&segLen(car.lon,car.lat,skyAt.lon,skyAt.lat)<12000) return; skyBusy=true; const c={lon:+car.lon.toFixed(1),lat:+car.lat.toFixed(1)};
+  const bb=`${(c.lat-0.27).toFixed(2)},${(c.lon-0.33).toFixed(2)},${(c.lat+0.27).toFixed(2)},${(c.lon+0.33).toFixed(2)}`;
+  const q=`[out:json][timeout:60];way["building"]["height"](if:number(t["height"])>=110)(${bb});out geom tags;`;
+  try{ const j=await overpass(q,'https://cache.local/sky/'+bb); const out=[]; for(const el of j.elements){ if(el.type!=='way'||!el.geometry||el.geometry.length<4) continue; const t=el.tags||{}; const h=parseFloat(t.height); if(!(h>=110)) continue;
+      const outer=el.geometry.map(p=>[p.lon,p.lat]); let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; for(const q2 of outer){x0=Math.min(x0,q2[0]);x1=Math.max(x1,q2[0]);y0=Math.min(y0,q2[1]);y1=Math.max(y1,q2[1]);}
+      out.push({id:el.id,outer,h,minH:parseFloat(t.min_height)||0,name:t.name||'',bb:[x0,y0,x1,y1],col:t['building:colour']||t['building:color']||'',far:true}); }
+    SKY=out; skyAt=c; tallDirty=true; }catch(err){} skyBusy=false; }
 async function updateTall(force){
   if(!REAL||tallBusy) return; if(!force&&tallAt&&segLen(car.lon,car.lat,tallAt.lon,tallAt.lat)<5000) return;
   tallBusy=true; const c={lon:+car.lon.toFixed(2),lat:+car.lat.toFixed(2)}; const s=c.lat-0.06,n=c.lat+0.06,w=c.lon-0.07,e=c.lon+0.07;
@@ -1244,7 +1265,7 @@ async function updateTall(force){
     for(const el of j.elements){ if(el.type!=='way'||!el.geometry||el.geometry.length<4) continue; const t=el.tags||{};
       let h=parseFloat(t.height); const lv=parseFloat(t['building:levels']); if(!(h>0)) h=lv>0?lv*3.6+3:0; if(!(h>=8)) continue;
       const outer=el.geometry.map(p=>[p.lon,p.lat]); let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; for(const q2 of outer){x0=Math.min(x0,q2[0]);x1=Math.max(x1,q2[0]);y0=Math.min(y0,q2[1]);y1=Math.max(y1,q2[1]);}
-      const minH=parseFloat(t.min_height)||0; out.push({outer,h,minH,name:t.name||'',bb:[x0,y0,x1,y1],col:t['building:colour']||t['building:color']||'',tower:t.man_made==='tower'}); }
+      const minH=parseFloat(t.min_height)||0; out.push({id:el.id,outer,h,minH,name:t.name||'',bb:[x0,y0,x1,y1],col:t['building:colour']||t['building:color']||'',tower:t.man_made==='tower'}); }
     TALL=out; tallAt=c; TGRID.clear();
     for(let i=0;i<TALL.length;i++){ const b=TALL[i].bb; for(let gx2=Math.floor(b[0]*500);gx2<=Math.floor(b[2]*500);gx2++) for(let gy2=Math.floor(b[1]*500);gy2<=Math.floor(b[3]*500);gy2++){ const k=gx2*1e6+gy2; let l=TGRID.get(k); if(!l) TGRID.set(k,l=[]); l.push(i); } }
     rebuildTall(); for(const t of rtiles.values()){ if(t.bld&&t.bldMesh){ t.g.remove(t.bldMesh); t.bldMesh.geometry.dispose(); t.bldMesh=null; t.bld=false; } }
@@ -1253,10 +1274,11 @@ function inPoly(p,poly){ let ins=false; for(let i=0,j=poly.length-1;i<poly.lengt
 function insideTall(lon,lat){ const l=TGRID.get(Math.floor(lon*500)*1e6+Math.floor(lat*500)); if(!l) return false; for(const i of l) if(inPoly([lon,lat],TALL[i].outer)) return true; return false; }
 function rebuildTall(){
   for(const m of [...tallGroup.children]){ tallGroup.remove(m); if(m.geometry&&m.isMesh) m.geometry.dispose(); }
-  if(!TALL.length) return; tallDirty=false;
+  if(!TALL.length&&!SKY.length) return; tallDirty=false;
   const pos=[],col=[],uv=[],idx=[]; const C=new THREE.Color(); const lbl=new THREE.Group();
-  for(const b of TALL){ let cx=0,cy=0; for(const q of b.outer){cx+=q[0];cy+=q[1];} cx/=b.outer.length; cy/=b.outer.length;
-    if(segLen(cx,cy,O.lon,O.lat)>9000) continue; const base=demAt(cx,cy); if(base===null){ tallDirty=true; continue; }
+  const ids=new Set(TALL.map(b=>b.id)); const list=TALL.concat(SKY.filter(b=>!ids.has(b.id)));
+  for(const b of list){ let cx=0,cy=0; for(const q of b.outer){cx+=q[0];cy+=q[1];} cx/=b.outer.length; cy/=b.outer.length;
+    const dO=segLen(cx,cy,O.lon,O.lat); if(dO>(b.h>=110?38000:9000)) continue; const base=dO<7000?demAt(cx,cy):(demSample(12,cx,cy)===null?null:demSample(12,cx,cy)-4); if(base===null){ tallDirty=true; continue; }
     const y0=base-1+b.minH, y1=base+b.h; let wc='#a9b6c0'; if(b.col){ try{ C.set(b.col); wc='#'+C.getHexString(); }catch(e){} } else if(b.h>80) wc='#8fa6ba'; else if(b.h>45) wc='#b3bec6'; else wc='#c7c9c4';
     C.set(wc); const wr=C.r,wg=C.g,wb=C.b; const n=b.outer.length; let acc=0;
     for(let i=0;i<n-1;i++){ const a=b.outer[i], c2=b.outer[i+1]; const ax=LX(a[0]),az=LZ(a[1]),bx=LX(c2[0]),bz=LZ(c2[1]); const L=Math.hypot(bx-ax,bz-az); if(L<0.3) continue;
@@ -1268,6 +1290,117 @@ function rebuildTall(){
   if(idx.length){ const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3)); geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); geo.setIndex(idx); geo.computeVertexNormals();
     const m=shade(new THREE.Mesh(geo,tallMat)); m.matrixAutoUpdate=false; tallGroup.add(m); }
   lbl.visible=SHOW_LABELS; tallGroup.add(lbl); tallGroup.userData.lbl=lbl; }
+
+/* ================= landmarks, great bridges and mountain names ================= */
+const LM=[
+ {n:'東京スカイツリー',t:'skytree',lon:139.81071,lat:35.71005,h:634},
+ {n:'東京タワー',t:'lattice',lon:139.74544,lat:35.65856,h:333,c:['#e2581c','#f1f1ec'],w:40,d:[145,250],top:0.78},
+ {n:'名古屋テレビ塔',t:'lattice',lon:136.90833,lat:35.17230,h:180,c:['#c4cad0','#c4cad0'],w:15,d:[90],top:0.62},
+ {n:'さっぽろテレビ塔',t:'lattice',lon:141.35645,lat:43.06111,h:147,c:['#d8692b','#efefea'],w:12,d:[90],top:0.66},
+ {n:'通天閣',t:'lattice',lon:135.50631,lat:34.65254,h:108,c:['#cdd2d6','#cdd2d6'],w:11,d:[88],top:0.80},
+ {n:'京都タワー',t:'kyoto',lon:135.75933,lat:34.98756,h:131},
+ {n:'神戸ポートタワー',t:'hyper',lon:135.18672,lat:34.68263,h:108},
+ {n:'福岡タワー',t:'prism',lon:130.35147,lat:33.59329,h:234},
+ {n:'大阪城',t:'castle',lon:135.52589,lat:34.68749,h:55,w:40,tiers:5,roof:'#3f6e5f',wall:'#f2f0ea'},
+ {n:'名古屋城',t:'castle',lon:136.89909,lat:35.18558,h:55,w:40,tiers:5,roof:'#4a7268',wall:'#f2f0ea'},
+ {n:'姫路城',t:'castle',lon:134.69389,lat:34.83945,h:46,w:34,tiers:6,roof:'#59606a',wall:'#f4f4f0'},
+ {n:'熊本城',t:'castle',lon:130.70584,lat:32.80618,h:43,w:32,tiers:5,roof:'#2f3338',wall:'#3a3a3a'},
+ {n:'松本城',t:'castle',lon:137.97016,lat:36.23745,h:30,w:22,tiers:5,roof:'#3b4045',wall:'#2a2a2a'},
+ {n:'彦根城',t:'castle',lon:136.25222,lat:35.27657,h:21,w:18,tiers:3,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'岡山城',t:'castle',lon:133.93609,lat:34.66540,h:27,w:22,tiers:5,roof:'#3b4045',wall:'#262626'},
+ {n:'広島城',t:'castle',lon:132.45905,lat:34.40274,h:39,w:26,tiers:5,roof:'#4a5058',wall:'#30302e'},
+ {n:'犬山城',t:'castle',lon:136.93917,lat:35.38833,h:24,w:18,tiers:3,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'松山城',t:'castle',lon:132.76573,lat:33.84559,h:24,w:18,tiers:3,roof:'#3b4045',wall:'#f2f0ea'},
+ {n:'高知城',t:'castle',lon:133.53151,lat:33.56079,h:22,w:16,tiers:4,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'小田原城',t:'castle',lon:139.15344,lat:35.25100,h:38,w:26,tiers:4,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'岐阜城',t:'castle',lon:136.78205,lat:35.43392,h:18,w:14,tiers:3,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'福山城',t:'castle',lon:133.36115,lat:34.49130,h:30,w:22,tiers:5,roof:'#4a5058',wall:'#f2f0ea'},
+ {n:'東寺 五重塔',t:'pagoda',lon:135.74872,lat:34.97987,h:55,w:9.5},
+ {n:'法隆寺 五重塔',t:'pagoda',lon:135.73411,lat:34.61422,h:32,w:6.5},
+];
+const BRIDGES=[ // towers t1,t2; side span (m); tower height H and deck height D above sea (m, approximate)
+ {n:'明石海峡大橋',k:'s',t1:[135.01468,34.60941],t2:[135.02724,34.62402],side:960,H:298,D:68,c:'#d3dcd7',w:35},
+ {n:'大鳴門橋',k:'s',t1:[134.64610,34.23718],t2:[134.65468,34.23992],side:330,H:144,D:45,c:'#d8dbd8',w:30},
+ {n:'南備讃瀬戸大橋',k:'s',t1:[133.82371,34.36908],t2:[133.82684,34.35953],side:274,H:194,D:62,c:'#c6ced2',w:35},
+ {n:'北備讃瀬戸大橋',k:'s',t1:[133.81910,34.38286],t2:[133.82188,34.37449],side:274,H:184,D:62,c:'#c6ced2',w:35},
+ {n:'下津井瀬戸大橋',k:'s',t1:[133.80495,34.42697],t2:[133.80710,34.43525],side:230,H:149,D:40,c:'#c6ced2',w:35},
+ {n:'関門橋',k:'s',t1:[130.95552,33.96339],t2:[130.96204,33.95998],side:178,H:141,D:61,c:'#e2e2de',w:30},
+ {n:'レインボーブリッジ',k:'s',t1:[139.76023,35.63750],t2:[139.76609,35.63564],side:114,H:126,D:50,c:'#f0f0ee',w:30},
+ {n:'横浜ベイブリッジ',k:'c',t1:[139.67401,35.45401],t2:[139.67661,35.45759],side:200,H:172,D:52,c:'#f0f0ee',w:40},
+ {n:'鶴見つばさ橋',k:'c',t1:[139.69667,35.47096],t2:[139.70165,35.47316],side:255,H:183,D:40,c:'#f0f0ee',w:30},
+];
+for(const b of BRIDGES){ const k=111320*Math.cos(b.t1[1]*D2R); const dx=(b.t2[0]-b.t1[0])*k, dy=(b.t2[1]-b.t1[1])*KY; b.L=Math.hypot(dx,dy); b.ux=dx/b.L; b.uy=dy/b.L; b.kx=k; b.lon=(b.t1[0]+b.t2[0])/2; b.lat=(b.t1[1]+b.t2[1])/2; }
+// deck height for road vertices that lie on one of the great bridges
+function bridgeDeck(lon,lat){ for(const b of BRIDGES){ if(Math.abs(lon-b.lon)>0.04||Math.abs(lat-b.lat)>0.04) continue; const x=(lon-b.t1[0])*b.kx, y=(lat-b.t1[1])*KY; const s=x*b.ux+y*b.uy, l=Math.abs(-x*b.uy+y*b.ux);
+  if(l<70&&s>-b.side&&s<b.L+b.side) return b.D; } return null; }
+const PEAKS=[['富士山',138.7274,35.3607,3776],['浅間山',138.5230,36.4066,2568],['槍ヶ岳',137.6476,36.3420,3180],['立山',137.6179,36.5732,3003],['御嶽山',137.4804,35.8930,3067],['白山',136.7715,36.1550,2702],
+ ['八ヶ岳（赤岳）',138.3701,35.9708,2899],['伊吹山',136.4063,35.4178,1377],['比叡山',135.8341,35.0669,848],['六甲山',135.2637,34.7780,931],['生駒山',135.6790,34.6785,642],['金剛山',135.6729,34.4194,1125],
+ ['大山',133.5464,35.3713,1729],['石鎚山',133.1151,33.7678,1982],['阿蘇山',131.1039,32.8844,1592],['雲仙岳',130.2989,32.7614,1483],['霧島山',130.8616,31.9342,1700],['桜島',130.6566,31.5926,1117],
+ ['岩木山',140.3031,40.6559,1625],['岩手山',141.0011,39.8526,2038],['鳥海山',140.0503,39.0992,2236],['蔵王山',140.4398,38.1439,1841],['磐梯山',140.0722,37.6010,1816],['那須岳',139.9629,37.1249,1915],
+ ['男体山',139.4909,36.7651,2484],['赤城山',139.1933,36.5604,1828],['谷川岳',138.9302,36.8371,1977],['妙高山',138.1135,36.8913,2454],['筑波山',140.1067,36.2254,877],['箱根山',139.0210,35.2335,1438],['羊蹄山',140.8067,42.8270,1898]];
+const CURV=6.83e-8; // earth curvature with standard refraction: drop = d^2 * CURV
+const lmGroup=new THREE.Group(); scene.add(lmGroup); const peakGroup=new THREE.Group(); scene.add(peakGroup);
+const lmMats=new Map(), lmGlow=[];
+function lmMat(col,opt={}){ const key=col+JSON.stringify(opt); let m=lmMats.get(key); if(m) return m;
+  m=new THREE.MeshLambertMaterial({color:col,side:opt.double?THREE.DoubleSide:THREE.FrontSide,map:opt.map||null,alphaTest:opt.map?0.3:0,alphaToCoverage:!!opt.map});
+  if(opt.glow){ m.emissive=new THREE.Color(opt.glow); m.emissiveIntensity=0; lmGlow.push(m); }
+  curvePatch(m,'lm'+(opt.map?'t':'')+(opt.double?'d':''),null,false); lmMats.set(key,m); return m; }
+const latticeTex=(()=>{ const c=document.createElement('canvas'); c.width=c.height=64; const g=c.getContext('2d'); g.strokeStyle='#fff'; g.lineWidth=7; g.strokeRect(3,3,58,58); g.lineWidth=5; g.beginPath(); g.moveTo(0,0); g.lineTo(64,64); g.moveTo(64,0); g.lineTo(0,64); g.stroke();
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(4,3); t.anisotropy=8; return t; })();
+function frustum(rb,rt,h,seg=4,open=false){ const g=new THREE.CylinderGeometry(rt,rb,h,seg,1,open); g.translate(0,h/2,0); if(seg===4) g.rotateY(Math.PI/4); return g; }
+function addM(gr,geo,mat,x=0,y=0,z=0){ const m=new THREE.Mesh(geo,mat); m.position.set(x,y,z); m.castShadow=HQ; m.receiveShadow=true; gr.add(m); return m; }
+function buildLandmark(L){
+  const g=new THREE.Group(); const H=L.h;
+  if(L.t==='skytree'){ const w=lmMat('#dfe7ee'), dk=lmMat('#9fb4c4',{glow:'#ffe6b0'});
+    addM(g,frustum(34,20,340,16),w); addM(g,frustum(26,26,16,16),dk,0,340); addM(g,frustum(18,14,89,16),w,0,356); addM(g,frustum(17,17,10,16),dk,0,445); addM(g,frustum(12,9,40,16),w,0,455); addM(g,frustum(4,1.4,139,8),w,0,495); }
+  else if(L.t==='lattice'){ const Ht=H*L.top; const r=y=>L.w*Math.pow(Math.max(0,1-y/Ht),1.5)+2.5; const N=8;
+    for(let i=0;i<N;i++){ const y0=Ht*i/N, y1=Ht*(i+1)/N; const band=y0>(L.d[0]||0)&&(i%2===1); addM(g,frustum(r(y0)*Math.SQRT2,r(y1)*Math.SQRT2,y1-y0,4,true),lmMat(band?L.c[1]:L.c[0],{map:latticeTex,double:true}),0,y0); }
+    for(const dy of L.d){ const rr=r(dy)+4; addM(g,new THREE.BoxGeometry(rr*2,10,rr*2).translate(0,5,0),lmMat('#c9cdd1',{glow:'#ffe2a8'}),0,dy); }
+    addM(g,frustum(1.6,0.6,H-Ht,6),lmMat(L.c[1]),0,Ht); }
+  else if(L.t==='kyoto'){ addM(g,new THREE.BoxGeometry(60,31,30).translate(0,15.5,0),lmMat('#e6e4dd',{glow:'#ffd9a0'})); addM(g,frustum(7.5,6.2,64,16),lmMat('#f4f4f0'),0,31); addM(g,frustum(9.5,9.5,9,16),lmMat('#b8c6cf',{glow:'#ffe6b0'}),0,95); addM(g,frustum(2.2,0.7,27,8),lmMat('#d23a2a'),0,104); }
+  else if(L.t==='hyper'){ const pts=[]; for(let y=0;y<=90;y+=6){ const r=4+8*Math.pow((y-58)/58,2); pts.push(new THREE.Vector2(r,y)); } addM(g,new THREE.LatheGeometry(pts,24),lmMat('#c8202a',{double:true})); addM(g,frustum(9,9,10,16),lmMat('#b8c6cf',{glow:'#ffe6b0'}),0,90); addM(g,frustum(1.5,0.6,8,8),lmMat('#c8202a'),0,100); }
+  else if(L.t==='prism'){ addM(g,frustum(14,10,180,3),lmMat('#8fb3d1',{glow:'#9fd0ff'})); addM(g,frustum(10,3,54,3),lmMat('#a9c2d6'),0,180); }
+  else if(L.t==='castle'){ const W=L.w, Hb=H*0.28, n=L.tiers, hu=(H-Hb)/(n+0.6); const stone=lmMat('#8e8a80'), wall=lmMat(L.wall,{glow:'#ffd9a0'}), roof=lmMat(L.roof);
+    addM(g,frustum(W*Math.SQRT1_2,W*0.88*Math.SQRT1_2,Hb),stone); let w=W*0.82, y=Hb;
+    for(let i=0;i<n;i++){ const hw=hu*0.62, hr=hu*0.38; addM(g,new THREE.BoxGeometry(w,hw,w*0.8).translate(0,hw/2,0),wall,0,y); addM(g,frustum(w*1.28*Math.SQRT1_2,w*0.92*Math.SQRT1_2,hr),roof,0,y+hw); y+=hw+hr; w*=0.86; }
+    addM(g,frustum(w*1.25*Math.SQRT1_2,0.5,hu*0.6),roof,0,y); }
+  else if(L.t==='pagoda'){ const W=L.w, t=H*0.72/5; const wood=lmMat('#5a3a28'), roof=lmMat('#3b3b3b'); let y=0;
+    for(let i=0;i<5;i++){ const w=W*(1-0.07*i); addM(g,new THREE.BoxGeometry(w,t*0.62,w).translate(0,t*0.31,0),wood,0,y); addM(g,frustum(w*1.75*Math.SQRT1_2,w*1.05*Math.SQRT1_2,t*0.38),roof,0,y+t*0.62); y+=t; }
+    addM(g,frustum(0.6,0.3,H-y,8),lmMat('#7a6a3a'),0,y); }
+  return g; }
+function buildBridge(b){
+  const g=new THREE.Group(); const col=lmMat(b.c), conc=lmMat('#a7a6a0'), L=b.L, H=b.H, D=b.D, w=b.w;
+  for(const x of [0,L]){ for(const z of [-w/2,w/2]) addM(g,new THREE.BoxGeometry(7,H+12,9).translate(0,(H+12)/2-12,0),col,x,0,z);
+    for(const f of (b.k==='s'?[0.3,0.62,0.97]:[0.55,0.97])) addM(g,new THREE.BoxGeometry(5,5,w).translate(0,2.5,0),col,x,H*f-5,0); }
+  const lines=[];
+  if(b.k==='s'){ for(const z of [-w/2,w/2]){ const pts=[new THREE.Vector3(-b.side,D+3,z)]; for(let i=1;i<=8;i++){ const x=-b.side+b.side*i/8, u=i/8; pts.push(new THREE.Vector3(x,D+3+(H-D-5)*u*u,z)); }
+      for(let i=1;i<40;i++){ const x=L*i/40, u=(x-L/2)/(L/2); pts.push(new THREE.Vector3(x,D+4+(H-D-6)*u*u,z)); }
+      for(let i=0;i<=8;i++){ const x=L+b.side*i/8, u=1-i/8; pts.push(new THREE.Vector3(x,D+3+(H-D-5)*u*u,z)); }
+      const cv=new THREE.CatmullRomCurve3(pts); addM(g,new THREE.TubeGeometry(cv,160,1.1,6),col);
+      for(let x=12;x<L-6;x+=24){ const u=(x-L/2)/(L/2); lines.push(x,D+1,z, x,D+4+(H-D-6)*u*u,z); } }
+    for(const x of [-b.side,L+b.side]) addM(g,new THREE.BoxGeometry(40,D+12,w+20).translate(0,(D+12)/2-8,0),conc,x,0,0); }
+  else { for(const z of [-w/2,w/2]) for(const tx of [0,L]) for(let k=1;k<=11;k++){ const d=k*(L/2-15)/11, yt=H*0.72+H*0.22*k/11; lines.push(tx,yt,z, tx+d,D+1,z, tx,yt,z, tx-Math.min(d,b.side),D+1,z); } }
+  if(lines.length){ const lg=new THREE.BufferGeometry(); lg.setAttribute('position',new THREE.Float32BufferAttribute(lines,3)); const lm=new THREE.LineBasicMaterial({color:b.c}); curvePatch(lm,'lmline',null,false); g.add(new THREE.LineSegments(lg,lm)); }
+  return g; }
+function lmBase(lon,lat,near){ if(near){ const h=demSample(14,lon,lat); if(h!==null) return h; } const h=demSample(12,lon,lat); return h===null?null:h-6.5; }
+function placeLabel(it,top){ if(!it.lbl){ it.lbl=labelSprite(it.n,999); lmGroup.add(it.lbl); } const d=segLen(car.lon,car.lat,it.lon,it.lat); it.lbl.position.set(LX(it.lon),top+28-d*d*CURV,LZ(it.lat)); it.lbl.visible=SHOW_LABELS&&d<45000; }
+function updateLandmarks(){
+  if(!REAL) return;
+  const all=[...LM.map(L=>({it:L,br:false})),...BRIDGES.map(b=>({it:b,br:true}))];
+  for(const {it,br} of all){ const d=segLen(car.lon,car.lat,it.lon,it.lat);
+    if(d>70000){ if(it.g){ lmGroup.remove(it.g); disposeGroup(it.g); it.g=null; } if(it.lbl){ lmGroup.remove(it.lbl); it.lbl=null; } continue; }
+    if(!it.g){ if(br){ it.g=buildBridge(it); it.g.position.set(LX(it.t1[0]),0,LZ(it.t1[1])); it.g.rotation.y=Math.atan2(it.uy,it.ux); }
+      else { const base=lmBase(it.lon,it.lat,d<5000); if(base===null) continue; it.base=base; it.near=d<5000; it.g=buildLandmark(it); it.g.position.set(LX(it.lon),base-0.5,LZ(it.lat)); }
+      it.g.traverse(o=>{ o.matrixAutoUpdate=true; }); lmGroup.add(it.g); }
+    else if(!br&&!it.near&&d<5000){ const b2=demSample(14,it.lon,it.lat); if(b2!==null){ it.base=b2; it.near=true; it.g.position.y=b2-0.5; } }
+    placeLabel(it,(br?it.H:(it.base||0)+it.h)); }
+  // mountain names
+  for(const p of PEAKS){ const d=segLen(car.lon,car.lat,p[1],p[2]);
+    if(d>140000||d<1500){ if(p.s){ peakGroup.remove(p.s); p.s=null; } continue; }
+    if(!p.s){ p.s=labelSprite('▲ '+p[0]+' '+p[3]+'m',998); p.s.material.depthTest=true; peakGroup.add(p.s); }
+    p.s.position.set(LX(p[1]),p[3]+90-d*d*CURV,LZ(p[2])); p.s.visible=SHOW_LABELS; }
+}
+function clearLandmarks(){ for(const it of [...LM,...BRIDGES]){ if(it.g){ lmGroup.remove(it.g); disposeGroup(it.g); it.g=null; } if(it.lbl){ lmGroup.remove(it.lbl); it.lbl=null; } } for(const p of PEAKS){ if(p.s){ peakGroup.remove(p.s); p.s=null; } } }
 
 /* ================= graph walking ================= */
 const tmpS={},tmpS2={};
@@ -1495,10 +1628,10 @@ function updateSky(){
   sun.intensity=Math.max(0,A.sun+(B.sun-A.sun)*t); sun.color.copy(skyU.sunCol.value).lerp(new THREE.Color('#ffffff'),.4);
   sun.position.copy(pcar.position).addScaledVector(sp.v.y>0?sp.v:new THREE.Vector3(0.3,1,0.2),700); sun.target.position.copy(pcar.position); sun.castShadow=HQ&&sp.v.y>0.04;
   if(sp.v.y<=0){ sun.intensity=0.12*nightF; sun.color.set('#8ea6ff'); }
-  if(REAL){ scene.fog.near=nightF>.5?60:1200; scene.fog.far=34000-30000*nightF; } else { scene.fog.near=nightF>.5?80:300; scene.fog.far=4200-2600*nightF; }
+  if(REAL){ scene.fog.near=nightF>.5?60:2500; scene.fog.far=170000-166000*nightF; } else { scene.fog.near=nightF>.5?80:300; scene.fog.far=4200-2600*nightF; }
   // night emissives
   const on=nightF>.35;
-  lampMat.color.set(on?'#ffd28a':'#3a3a36'); bldMat.emissiveIntensity=nightF*1.15; tallMat.emissiveIntensity=nightF*1.3; for(const m of signMats.values()) m.emissiveIntensity=0.12+nightF*0.5; reflMat.color.set(on?'#ffb347':'#6a5a30');
+  lampMat.color.set(on?'#ffd28a':'#3a3a36'); bldMat.emissiveIntensity=nightF*1.15; for(const m of lmGlow) m.emissiveIntensity=nightF*0.9; tallMat.emissiveIntensity=nightF*1.3; for(const m of signMats.values()) m.emissiveIntensity=0.12+nightF*0.5; reflMat.color.set(on?'#ffb347':'#6a5a30');
   tailMat.color.set(on?'#ff2a1a':'#5a0a0a'); headMat.color.set(on?'#fff6dc':'#9a9a8e');
   winMat.color.set(on?'#ffc873':'#1e2428');
   head.intensity=on?90:0;
@@ -1806,7 +1939,7 @@ function frame(t){
     renderRoute();
     if(!panel.hidden){ $('hourBig').textContent=fmtHM(minutes); hourIn.value=Math.floor(((minutes%1440)+1440)%1440); $('sunNote').textContent=`太陽高度 ${sp.alt.toFixed(0)}°（北緯${car.lat.toFixed(1)}°）`; }
   }
-  miniT-=dt; if(miniT<=0){ miniT=0.15; drawMini(); if(REAL){ fadeLabels(); updateTall(false); if(tallDirty&&TALL.length&&t-tallTry>2500){ tallTry=t; rebuildTall(); } if(tallGroup.userData.lbl) tallGroup.userData.lbl.visible=SHOW_LABELS; } }
+  miniT-=dt; if(miniT<=0){ miniT=0.15; drawMini(); if(REAL){ fadeLabels(); updateTall(false); updateSkyline(); if(t-lmT>1000){ lmT=t; updateLandmarks(); } if(tallDirty&&(TALL.length||SKY.length)&&t-tallTry>2500){ tallTry=t; rebuildTall(); } if(tallGroup.userData.lbl) tallGroup.userData.lbl.visible=SHOW_LABELS; } }
   drawFx(); updateAudio();
   renderer.render(scene,camera);
 }
@@ -1828,7 +1961,7 @@ window.__nhd={profH,groundAt,ensureProfile,get PROF_READY(){return PROF_READY},g
   // real terrain if 地理院タイル reachable
   document.getElementById('boot').textContent='地形データ（国土地理院）を確認中…';
   if(await probeGSI(car.lon,car.lat)){
-    REAL=true; camera.far=60000; camera.updateProjectionMatrix(); sky.scale.setScalar(5); ring.visible=false;
+    REAL=true; camera.far=260000; camera.updateProjectionMatrix(); sky.scale.setScalar(5); ring.visible=false;
     document.getElementById('gsiCredit').hidden=false;
     document.getElementById('boot').textContent='航空写真と標高を読み込み中…';
     await waitDemAround(car.lon,car.lat,0.03,20000);
