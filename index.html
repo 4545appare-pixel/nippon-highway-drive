@@ -978,10 +978,10 @@ function buildBuildings(t,bv){
   const rnd=()=>{seed=(seed*1664525+1013904223)|0;return (seed>>>0)/4294967296;};
   for(const b of list){
     let cx=0,cy=0; for(const q of b.outer){cx+=q[0];cy+=q[1];} cx/=b.outer.length; cy/=b.outer.length;
-    const [d,hw]=roadDistN(cx,cy,40); if(d<hw+8) continue; if(TALL.length&&insideTall(cx,cy)) continue;
+    if(TALL.length&&insideTall(cx,cy)) continue;
     const base=demAt(cx,cy); if(base===null) continue;
     const hr=BLD_H[b.code]||BLD_H[3101]; let h=hr[0]+(hr[1]-hr[0])*rnd(); if(b.code===3102&&b.area>1500) h*=1.4;
-    const y0=base-1.5, y1=base+h;
+    const y0=base-1.5, y1=base+h; if(bldRoadHit(b.outer,cx,cy,y0,y1)) continue;
     const pal=BLD_C[b.code]||BLD_C[3101]; C.set(pal[0][Math.floor(rnd()*pal[0].length)]); const wr=C.r,wg=C.g,wb=C.b; C.set(pal[1]); const rr=C.r*(0.85+rnd()*0.3),rg=C.g*(0.85+rnd()*0.3),rb=C.b*(0.85+rnd()*0.3);
     const bayW=b.code===3101?3.2:3.8, flH=b.code===3101?2.9:3.4;
     const rings=[b.outer,...b.holes];
@@ -1271,6 +1271,32 @@ async function updateTall(force){
     for(let i=0;i<TALL.length;i++){ const b=TALL[i].bb; for(let gx2=Math.floor(b[0]*500);gx2<=Math.floor(b[2]*500);gx2++) for(let gy2=Math.floor(b[1]*500);gy2<=Math.floor(b[3]*500);gy2++){ const k=gx2*1e6+gy2; let l=TGRID.get(k); if(!l) TGRID.set(k,l=[]); l.push(i); } }
     rebuildTall(); for(const t of rtiles.values()){ if(t.bld&&t.bldMesh){ t.g.remove(t.bldMesh); t.bldMesh.geometry.dispose(); t.bldMesh=null; t.bld=false; } }
   }catch(err){ tallRetry=Date.now()+60000; } tallBusy=false; }
+function segSegD(ax,ay,bx,by,cx,cy,dx,dy){ // 2D segment distance (metres)
+  const o=(px,py,qx,qy,rx,ry)=>(qx-px)*(ry-py)-(qy-py)*(rx-px);
+  const d1=o(ax,ay,bx,by,cx,cy), d2=o(ax,ay,bx,by,dx,dy), d3=o(cx,cy,dx,dy,ax,ay), d4=o(cx,cy,dx,dy,bx,by);
+  if(((d1>0)!==(d2>0))&&((d3>0)!==(d4>0))) return 0;
+  const ps=(px,py,x0,y0,x1,y1)=>{ const vx=x1-x0,vy=y1-y0,L=vx*vx+vy*vy; let t=L?((px-x0)*vx+(py-y0)*vy)/L:0; t=t<0?0:t>1?1:t; return Math.hypot(px-x0-vx*t,py-y0-vy*t); };
+  return Math.min(ps(ax,ay,cx,cy,dx,dy),ps(bx,by,cx,cy,dx,dy),ps(cx,cy,ax,ay,bx,by),ps(dx,dy,ax,ay,bx,by)); }
+// true when a building footprint overlaps a drivable road corridor at the same height (car would pass through it)
+function bldRoadHit(outer,cx,cy,y0,y1){
+  const k=Math.cos(cy*D2R)*111320; const n=outer.length; const px=new Float64Array(n), py=new Float64Array(n); let rad=0;
+  for(let i=0;i<n;i++){ px[i]=(outer[i][0]-cx)*k; py[i]=(outer[i][1]-cy)*KY; rad=Math.max(rad,Math.hypot(px[i],py[i])); }
+  const R=rad+45; const [d0]=roadDistN(cx,cy,R+15); if(d0>R+13) return false;
+  const cand=new Set(); const c0x=Math.floor((cx-R/k)*RC), c1x=Math.floor((cx+R/k)*RC), c0y=Math.floor((cy-R/KY)*RC), c1y=Math.floor((cy+R/KY)*RC);
+  for(let gx=c0x;gx<=c1x;gx++) for(let gy=c0y;gy<=c1y;gy++){ const l=RH.get(rk(gx,gy)); if(!l) continue;
+    for(let i=0;i<l.length;i+=5){ const dx=(l[i]-cx)*k, dy=(l[i+1]-cy)*KY; if(dx*dx+dy*dy<(R+13)*(R+13)) cand.add(l[i+2]); } }
+  const poly=[]; for(let i=0;i<n;i++) poly.push([px[i],py[i]]);
+  for(const ei of cand){ const e=E[ei]; if(!e||!validE(e)) continue; const P=path(e); const hw=halfWidth(e)+4.5, lim=rad+hw;
+    for(let i=1;i<P.n;i++){ const ax=(P.lon[i-1]-cx)*k, ay=(P.lat[i-1]-cy)*KY, bx=(P.lon[i]-cx)*k, by=(P.lat[i]-cy)*KY;
+      const vx=bx-ax,vy=by-ay,L2=vx*vx+vy*vy; let t=L2?-(ax*vx+ay*vy)/L2:0; t=t<0?0:t>1?1:t; if(Math.hypot(ax+vx*t,ay+vy*t)>lim) continue;
+      let dm=(inPoly([ax,ay],poly)||inPoly([bx,by],poly))?0:1e9;
+      for(let j=0;j<n&&dm>=hw;j++){ const j2=(j+1)%n; dm=Math.min(dm,segSegD(ax,ay,bx,by,px[j],py[j],px[j2],py[j2])); }
+      if(dm>=hw) continue;
+      const sr=(P.cum[i-1]+(P.cum[i]-P.cum[i-1])*t)/(P.ratio||1); const lon=P.lon[i-1]+(P.lon[i]-P.lon[i-1])*t, lat=P.lat[i-1]+(P.lat[i]-P.lat[i-1])*t;
+      const g=groundAt(e,sr,lon,lat); if(g===null||g===undefined||!isFinite(g)) return true;
+      const deck=g+(e.hT!==undefined?levAt(e,sr):0);
+      if(deck+5.5>y0&&deck-1<y1) return true; } }
+  return false; }
 function inPoly(p,poly){ let ins=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const a=poly[i],b=poly[j]; if(((a[1]>p[1])!==(b[1]>p[1]))&&(p[0]<(b[0]-a[0])*(p[1]-a[1])/((b[1]-a[1])||1e-12)+a[0])) ins=!ins; } return ins; }
 function insideTall(lon,lat){ const l=TGRID.get(Math.floor(lon*500)*1e6+Math.floor(lat*500)); if(!l) return false; for(const i of l) if(inPoly([lon,lat],TALL[i].outer)) return true; return false; }
 function rebuildTall(){
@@ -1280,7 +1306,7 @@ function rebuildTall(){
   const ids=new Set(TALL.map(b=>b.id)); const list=TALL.concat(SKY.filter(b=>!ids.has(b.id)));
   for(const b of list){ let cx=0,cy=0; for(const q of b.outer){cx+=q[0];cy+=q[1];} cx/=b.outer.length; cy/=b.outer.length;
     const dO=segLen(cx,cy,O.lon,O.lat); if(dO>(b.h>=110?38000:9000)) continue; const base=dO<7000?demAt(cx,cy):(demSample(12,cx,cy)===null?null:demSample(12,cx,cy)-4); if(base===null){ tallDirty=true; continue; }
-    const y0=base-1+b.minH, y1=base+b.h; let wc='#a9b6c0'; if(b.col){ try{ C.set(b.col); wc='#'+C.getHexString(); }catch(e){} } else if(b.h>80) wc='#8fa6ba'; else if(b.h>45) wc='#b3bec6'; else wc='#c7c9c4';
+    const y0=base-1+b.minH, y1=base+b.h; if(bldRoadHit(b.outer,cx,cy,y0,y1)) continue; let wc='#a9b6c0'; if(b.col){ try{ C.set(b.col); wc='#'+C.getHexString(); }catch(e){} } else if(b.h>80) wc='#8fa6ba'; else if(b.h>45) wc='#b3bec6'; else wc='#c7c9c4';
     C.set(wc); const wr=C.r,wg=C.g,wb=C.b; const n=b.outer.length; let acc=0;
     for(let i=0;i<n-1;i++){ const a=b.outer[i], c2=b.outer[i+1]; const ax=LX(a[0]),az=LZ(a[1]),bx=LX(c2[0]),bz=LZ(c2[1]); const L=Math.hypot(bx-ax,bz-az); if(L<0.3) continue;
       const v0=pos.length/3; pos.push(ax,y0,az,bx,y0,bz,bx,y1,bz,ax,y1,az); for(let k=0;k<4;k++) col.push(wr,wg,wb);
@@ -1945,7 +1971,7 @@ function frame(t){
   renderer.render(scene,camera);
 }
 
-window.__nhd={profH,groundAt,ensureProfile,get PROF_READY(){return PROF_READY},get REAL(){return REAL},N06E,get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork,chunks,camera,scene,renderer,updateRoads,roadGroup,terrGroup,roadY,O,LX,LZ,buildChunk};
+window.__nhd={bldRoadHit,profH,groundAt,ensureProfile,get PROF_READY(){return PROF_READY},get REAL(){return REAL},N06E,get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork,chunks,camera,scene,renderer,updateRoads,roadGroup,terrGroup,roadY,O,LX,LZ,buildChunk};
 /* ================= boot ================= */
 (async function boot(){
   const j=JOINTS.find(j=>j.name==='吹田JCT'&&validJ(j));
