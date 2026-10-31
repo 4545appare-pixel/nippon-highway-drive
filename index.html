@@ -715,7 +715,7 @@ function prioOf(lon,lat){ return segLen(lon,lat,car.lon||lon,car.lat||lat); }
 const DEM=new Map();
 function demTile(z,x,y){ const k=z+'/'+x+'/'+y; let t=DEM.get(k); if(t) return t; t={st:0}; DEM.set(k,t);
   const lon=x2lon(x+.5,z), lat=y2lat(y+.5,z);
-  loadImg(`${GSI}dem_png/${z}/${x}/${y}.png`,prioOf(lon,lat)).then(im=>{
+  loadImg(`${GSI}dem_png/${z}/${x}/${y}.png`,prioOf(lon,lat)-1e7).then(im=>{
     const c=document.createElement('canvas');c.width=c.height=256;const g=c.getContext('2d',{willReadFrequently:true});g.drawImage(im,0,0);
     const d=g.getImageData(0,0,256,256).data; const a=new Float32Array(65536);
     for(let i=0;i<65536;i++){const v=d[i*4]*65536+d[i*4+1]*256+d[i*4+2]; a[i]=v===8388608?0:(v<8388608?v*0.01:(v-16777216)*0.01);}
@@ -805,7 +805,7 @@ function roadDistN(lon,lat,cap){ // like roadDist, also records nearest road sam
 const TEX=new Map();
 function setupTex(t){ t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=Math.min(16,renderer.capabilities.getMaxAnisotropy()); t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true; return t; }
 function photoTex(z,x,y,hi){ const k=z+'/'+x+'/'+y+(hi?'h'+hi:''); let t=TEX.get(k); if(t){t.used=frameNo;return t;}
-  t={st:0,used:frameNo,k}; TEX.set(k,t); const lon=x2lon(x+.5,z), lat=y2lat(y+.5,z), p=prioOf(lon,lat)+(hi?0:400);
+  t={st:0,used:frameNo,k}; TEX.set(k,t); const lon=x2lon(x+.5,z), lat=y2lat(y+.5,z), p=prioOf(lon,lat)+(hi===2?900:hi?0:400);
   if(!hi){ loadImg(`${GSI}seamlessphoto/${z}/${x}/${y}.jpg`,p).then(im=>{t.tex=setupTex(new THREE.Texture(im));t.st=1;}).catch(()=>{t.st=2;}); }
   else { const N=1<<hi, W=256*N; const c=document.createElement('canvas');c.width=c.height=W;const g=c.getContext('2d',{willReadFrequently:true}); g.fillStyle='#55626a'; g.fillRect(0,0,W,W); let n=0;
     for(let dy=0;dy<N;dy++)for(let dx=0;dx<N;dx++) loadImg(`${GSI}seamlessphoto/${z+hi}/${N*x+dx}/${N*y+dy}.jpg`,p).then(im=>g.drawImage(im,dx*256,dy*256)).catch(()=>{}).finally(()=>{ if(++n===N*N){ t.canvas=c; t.tex=setupTex(new THREE.CanvasTexture(c)); t.st=1; } }); }
