@@ -230,6 +230,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <div class="blk">
       <h3>交通量・表示</h3>
       <div class="seg" id="traffic"><button type="button" data-n="0">車なし</button><button type="button" data-n="14">少なめ</button><button type="button" data-n="40">多め</button></div>
+      <div class="seg" id="quality"><button type="button" data-q="hi">高画質（影あり）</button><button type="button" data-q="std">標準</button></div>
       <div class="seg"><button type="button" id="bLabels" class="on">地名ラベル</button><button type="button" id="bSound" class="on">走行音</button></div>
     </div>
 
@@ -292,9 +293,9 @@ function edgesNear(lon,lat,rDeg){const s=new Set();for(let cx=Math.floor((lon-rD
 const RH = new Map(); const rk=(cx,cy)=>cx*65536+cy; const RC=250; // 0.004°
 for(const e of E){
   const hw = halfWidth(e);
-  let acc=0; const push=(lo,la)=>{const k=rk(Math.floor(lo*RC),Math.floor(la*RC));let l=RH.get(k);if(!l)RH.set(k,l=[]);l.push(lo,la,e.i,hw);};
-  push(e.lon[0],e.lat[0]);
-  for(let k=1;k<e.lon.length;k++){const L=e.cum[k]-e.cum[k-1];const m=Math.max(1,Math.ceil(L/25));for(let t=1;t<=m;t++){const u=t/m;push(e.lon[k-1]+(e.lon[k]-e.lon[k-1])*u,e.lat[k-1]+(e.lat[k]-e.lat[k-1])*u);}}
+  const push=(lo,la,sr)=>{const k=rk(Math.floor(lo*RC),Math.floor(la*RC));let l=RH.get(k);if(!l)RH.set(k,l=[]);l.push(lo,la,e.i,hw,sr);};
+  push(e.lon[0],e.lat[0],0);
+  for(let k=1;k<e.lon.length;k++){const L=e.cum[k]-e.cum[k-1];const m=Math.max(1,Math.ceil(L/25));for(let t=1;t<=m;t++){const u=t/m;push(e.lon[k-1]+(e.lon[k]-e.lon[k-1])*u,e.lat[k-1]+(e.lat[k]-e.lat[k-1])*u,e.cum[k-1]+L*u);}}
 }
 
 /* ================= road naming ================= */
@@ -366,7 +367,7 @@ function roadDist(lon,lat,cap){
   const cx=Math.floor(lon*RC),cy=Math.floor(lat*RC); const k=Math.cos(lat*D2R)*111320;
   let best=cap,hw=10; const rr=Math.ceil(cap/360);
   for(let dx=-rr;dx<=rr;dx++)for(let dy=-rr;dy<=rr;dy++){const l=RH.get(rk(cx+dx,cy+dy)); if(!l) continue;
-    for(let i=0;i<l.length;i+=4){ if(!validE(E[l[i+2]])) continue; const ddx=(l[i]-lon)*k, ddy=(l[i+1]-lat)*KY; const d=ddx*ddx+ddy*ddy; if(d<best*best){best=Math.sqrt(d);hw=l[i+3];} }}
+    for(let i=0;i<l.length;i+=5){ if(!validE(E[l[i+2]])) continue; const ddx=(l[i]-lon)*k, ddy=(l[i+1]-lat)*KY; const d=ddx*ddx+ddy*ddy; if(d<best*best){best=Math.sqrt(d);hw=l[i+3];} }}
   return [best,hw];
 }
 const smooth=(a,b,x)=>{const t=Math.max(0,Math.min(1,(x-a)/(b-a)));return t*t*(3-2*t);};
@@ -383,7 +384,8 @@ let renderer;
 try{ renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance',logarithmicDepthBuffer:true}); }
 catch(err){ document.getElementById('boot').textContent='このブラウザではWebGLが使えないため3D表示ができません。'; throw err; }
 const COARSE = matchMedia('(pointer:coarse)').matches;
-renderer.setPixelRatio(Math.min(devicePixelRatio, COARSE?1.5:2));
+let HQ=!COARSE; try{ const q=localStorage.getItem('nhd-quality'); if(q) HQ=q==='hi'; }catch(err){}
+renderer.setPixelRatio(Math.min(devicePixelRatio, HQ?2:1.25));
 renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.0;
 stage.appendChild(renderer.domElement);
 const scene=new THREE.Scene();
@@ -391,6 +393,9 @@ const camera=new THREE.PerspectiveCamera(62,1,0.3,14000);
 scene.fog=new THREE.Fog(0xcfe1ee,300,4200);
 const hemi=new THREE.HemisphereLight(0xdbe8ff,0x4a5a3a,1.2); scene.add(hemi);
 const sun=new THREE.DirectionalLight(0xffffff,2.2); scene.add(sun); scene.add(sun.target);
+renderer.shadowMap.enabled=HQ; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+sun.castShadow=HQ; sun.shadow.mapSize.set(2048,2048); { const sc=sun.shadow.camera; sc.left=-170; sc.right=170; sc.top=170; sc.bottom=-170; sc.near=20; sc.far=1500; } sun.shadow.bias=-0.0005; sun.shadow.normalBias=0.9;
+const shade=(o,cast=true)=>{ o.receiveShadow=true; o.castShadow=HQ&&cast; return o; };
 const head=new THREE.SpotLight(0xfff2d8,0,160,0.42,0.6,1.1); scene.add(head); scene.add(head.target);
 function resize(){const w=innerWidth,h=innerHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();}
 addEventListener('resize',resize); resize();
@@ -415,9 +420,9 @@ const ring=new THREE.Mesh(ringGeo,ringMat); scene.add(ring);
 
 /* ================= textures ================= */
 function roadTexture(div,per,ramp,one){
-  const hw=one?per*1.75+0.9:ramp?4:div?(1.5+0.75+per*3.5+2.5):(1.5+3.5+0.5); const W=hw*2; const px=512, py=256; const c=document.createElement('canvas');c.width=px;c.height=py;const g=c.getContext('2d');
+  const hw=one?per*1.75+0.9:ramp?4:div?(1.5+0.75+per*3.5+2.5):(1.5+3.5+0.5); const W=hw*2; const px=1024, py=512; const c=document.createElement('canvas');c.width=px;c.height=py;const g=c.getContext('2d');
   g.fillStyle='#484b4e';g.fillRect(0,0,px,py);
-  for(let i=0;i<5000;i++){const v=50+Math.random()*40|0;g.fillStyle=`rgb(${v},${v+2},${v+4})`;g.fillRect(Math.random()*px,Math.random()*py,1.5,1.5);}
+  for(let i=0;i<26000;i++){const v=48+Math.random()*44|0;g.fillStyle=`rgb(${v},${v+2},${v+4})`;const sz=Math.random()<0.85?1.2:2.4;g.fillRect(Math.random()*px,Math.random()*py,sz,sz);}
   const X=m=>(m+hw)/W*px; const line=(m,w,col,dash)=>{g.fillStyle=col;const x=X(m)-w/W*px/2,ww=Math.max(2,w/W*px);if(dash){g.fillRect(x,0,ww,py*0.4);}else g.fillRect(x,0,ww,py);};
   // tire wear
   g.globalAlpha=.10;g.fillStyle='#000';
@@ -436,7 +441,7 @@ function roadTexture(div,per,ramp,one){
     line(-0.25,0.15,'#f09a2a');line(0.25,0.15,'#f09a2a');
     line(-4,0.2,'#eeeeee');line(4,0.2,'#eeeeee');
   }
-  const t=new THREE.CanvasTexture(c);t.wrapS=THREE.ClampToEdgeWrapping;t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());return t;
+  const t=new THREE.CanvasTexture(c);t.wrapS=THREE.ClampToEdgeWrapping;t.wrapT=THREE.RepeatWrapping;t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=Math.min(16,renderer.capabilities.getMaxAnisotropy());return t;
 }
 const roadMats=new Map();
 function roadMat(e){const c=laneCfg(e);const key=c.div+':'+c.per+':'+!!c.ramp+':'+!!c.one;let m=roadMats.get(key);if(!m){m=new THREE.MeshLambertMaterial({map:roadTexture(c.div,c.per,c.ramp,c.one),polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});roadMats.set(key,m);}return m;}
@@ -481,7 +486,7 @@ function buildChunk(e,ci){
     const a=Math.max(0,i-1),b=Math.min(P.n-1,i+1);
     const k=Math.cos(P.lat[i]*D2R); let tx=(P.lon[b]-P.lon[a])*111320*k, tz=-(P.lat[b]-P.lat[a])*KY; const tl=Math.hypot(tx,tz)||1; tx/=tl;tz/=tl;
     const nx=tz, nz=-tx; // left normal
-    X.push(LX(P.lon[i]));Z.push(LZ(P.lat[i]));Y.push(roadY(P.lon[i],P.lat[i])+eps+(P.lev?P.lev[i]:0));NX.push(nx);NZ.push(nz);S.push(P.cum[i]);G.push(REAL?(demAt(P.lon[i],P.lat[i])??Y[Y.length-1]):Y[Y.length-1]);
+    X.push(LX(P.lon[i]));Z.push(LZ(P.lat[i]));{ const gy=groundAt(e,P.cum[i]/(P.ratio||1),P.lon[i],P.lat[i]); if(gy===null) return null; Y.push(gy+eps+(P.lev?P.lev[i]:0)); }NX.push(nx);NZ.push(nz);S.push(P.cum[i]);G.push(REAL?(demAt(P.lon[i],P.lat[i])??Y[Y.length-1]):Y[Y.length-1]);
   }
   const EXL=new Float32Array(n), EXR=new Float32Array(n);
   if(e.typ===10){ for(let j=0;j<n;j++){ const o=offAtS(e,S[j]); X[j]+=NX[j]*o; Z[j]+=NZ[j]*o; const sr=S[j]/P.ratio; EXL[j]=extraW(e,sr,1); EXR[j]=extraW(e,sr,-1); } }
@@ -544,7 +549,7 @@ function buildChunk(e,ci){
   const g=new THREE.Group();
   const mk=(pos,idx,mat,uvs)=>{if(!idx.length)return;const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));if(uvs)geo.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));geo.setIndex(idx);geo.computeVertexNormals();
     if(!uvs){ // make normals face up-ish for vertical strips lighting: fine as computed
-    } const m=new THREE.Mesh(geo,mat);m.matrixAutoUpdate=false;m.updateMatrix();g.add(m);};
+    } const m=shade(new THREE.Mesh(geo,mat));m.matrixAutoUpdate=false;m.updateMatrix();g.add(m);};
   mk(surf,sIdx,roadMat(e),uv);
   mk(rail,rIdx,deck?wallMat:railMat); mk(fins,finIdx,finMat);
   mk(med,mIdx,medMat);
@@ -732,22 +737,78 @@ const RING=[[0,0,2]]; for(let i=0;i<8;i++){const a=i/8*Math.PI*2; RING.push([Mat
 function realRoadY(lon,lat){ const k=Math.cos(lat*D2R)*111320; let s=0,w=0,sea=0;
   for(const [dx,dy,ww] of RING){ const h=demSample(14,lon+dx/k,lat+dy/KY); if(h===null) return null; s+=h*ww; w+=ww; if(h<=0.3) sea+=ww; }
   return Math.max(s/w, 1.5, (sea/w)*22); }
+/* road profile: a grade-limited fit of the terrain on the road graph (cut through ridges, bridge over valleys) */
+function fitProfile(nv,EI,EJ,EW,raw,fixed,out){
+  const ne=EI.length; const deg=new Int32Array(nv+1); for(let q=0;q<ne;q++){ deg[EI[q]+1]++; deg[EJ[q]+1]++; } for(let v=0;v<nv;v++) deg[v+1]+=deg[v];
+  const nb=new Int32Array(deg[nv]), nw=new Float64Array(deg[nv]), pos=deg.slice(0,nv);
+  for(let q=0;q<ne;q++){ const i=EI[q], j=EJ[q]; nb[pos[i]]=j; nw[pos[i]++]=EW[q]; nb[pos[j]]=i; nw[pos[j]++]=EW[q]; }
+  let m=Float64Array.from(raw); for(let v=0;v<nv;v++) if(fixed[v]) m[v]=out[v];
+  for(let it=0;it<60;it++){ const m2=Float64Array.from(m); for(let v=0;v<nv;v++){ if(fixed[v]) continue; const a=deg[v], b=deg[v+1]; if(a===b) continue; let sm=0; for(let k=a;k<b;k++) sm+=m[nb[k]]; m2[v]=0.5*m[v]+0.5*sm/(b-a); } m=m2; }
+  const m0=Float64Array.from(m), h=m;
+  for(let sw=0;sw<2500;sw++){ let viol=0; const fwd=!(sw&1);
+    for(let q0=0;q0<ne;q0++){ const q=fwd?q0:ne-1-q0; const i=EI[q], j=EJ[q], w=EW[q]; const d=h[i]-h[j]; let c; if(d>w) c=d-w; else if(d<-w) c=d+w; else continue;
+      const fi=fixed[i], fj=fixed[j]; if(fi&&fj) continue; if(fi) h[j]+=c; else if(fj) h[i]-=c; else { const mi=Math.abs(h[i]-m0[i])+1, mj=Math.abs(h[j]-m0[j])+1, t=mi/(mi+mj); h[i]-=c*t; h[j]+=c*(1-t); } const ac=Math.abs(c); if(ac>viol) viol=ac; }
+    if(viol<0.02) break; }
+  const env=(sign)=>{ const H=new Float64Array(nv); const cap=nv*4+16; let hk=new Float64Array(cap), hv=new Int32Array(cap), n=0;
+    const push=(k,v)=>{ if(n>=hk.length){ const k2=new Float64Array(hk.length*2), v2=new Int32Array(hk.length*2); k2.set(hk); v2.set(hv); hk=k2; hv=v2; } let i=n++; hk[i]=k; hv[i]=v; while(i>0){ const p=(i-1)>>1; if(hk[p]<=hk[i]) break; const tk=hk[p]; hk[p]=hk[i]; hk[i]=tk; const tv=hv[p]; hv[p]=hv[i]; hv[i]=tv; i=p; } };
+    for(let v=0;v<nv;v++){ H[v]=sign*h[v]; push(H[v],v); }
+    while(n>0){ const k=hk[0], v=hv[0]; n--; hk[0]=hk[n]; hv[0]=hv[n]; let i=0; for(;;){ const l=2*i+1, r=l+1; let mm=i; if(l<n&&hk[l]<hk[mm]) mm=l; if(r<n&&hk[r]<hk[mm]) mm=r; if(mm===i) break; const tk=hk[mm]; hk[mm]=hk[i]; hk[i]=tk; const tv=hv[mm]; hv[mm]=hv[i]; hv[i]=tv; i=mm; }
+      if(k>H[v]+1e-9) continue; for(let a=deg[v];a<deg[v+1];a++){ const u=nb[a]; if(fixed[u]) continue; const c=k+nw[a]; if(c<H[u]-1e-6){ H[u]=c; push(c,u); } } }
+    for(let v=0;v<nv;v++) H[v]*=sign; return H; };
+  const U=env(1), L=env(-1); let f=new Float64Array(nv); for(let v=0;v<nv;v++) f[v]=fixed[v]?out[v]:(U[v]+L[v])/2;
+  for(let it=0;it<4;it++){ const f2=Float64Array.from(f); for(let v=0;v<nv;v++){ if(fixed[v]) continue; const a=deg[v], b=deg[v+1]; if(a===b) continue; let sm=0; for(let k=a;k<b;k++) sm+=f[nb[k]]; f2[v]=0.5*f[v]+0.5*sm/(b-a); } f=f2; }
+  for(let v=0;v<nv;v++) if(!fixed[v]) out[v]=f[v];
+}
+async function loadDemBox(z,lon0,lat0,lon1,lat1,ms=25000){
+  const x0=Math.floor(lon2x(lon0,z)), x1=Math.floor(lon2x(lon1,z)), y0=Math.floor(lat2y(lat1,z)), y1=Math.floor(lat2y(lat0,z)); const ts=[];
+  for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++) ts.push(demTile(z,x,y));
+  const t0=performance.now(); while(ts.some(t=>t.st===0)&&performance.now()-t0<ms) await new Promise(r=>setTimeout(r,100)); }
+const PSP=100; let PNV=0; const PLON=[], PLAT=[];
+{ for(const e of E) PNV=Math.max(PNV,e.a+1,e.b+1); for(let i=0;i<PNV;i++){ PLON.push(0); PLAT.push(0); }
+  for(const e of E){ PLON[e.a]=e.lon[0]; PLAT[e.a]=e.lat[0]; PLON[e.b]=e.lon[e.lon.length-1]; PLAT[e.b]=e.lat[e.lat.length-1]; }
+  for(const e of E){ const n=Math.max(2,Math.ceil(e.len/PSP)+1), ids=new Int32Array(n); let k=0;
+    for(let i=0;i<n;i++){ const sr=e.len*i/(n-1); if(i===0) ids[i]=e.a; else if(i===n-1) ids[i]=e.b;
+      else { while(k<e.cum.length-2&&e.cum[k+1]<sr) k++; const L=e.cum[k+1]-e.cum[k], u=L>0?(sr-e.cum[k])/L:0; PLON.push(e.lon[k]+(e.lon[k+1]-e.lon[k])*u); PLAT.push(e.lat[k]+(e.lat[k+1]-e.lat[k])*u); ids[i]=PNV++; } }
+    e.pv=ids; } }
+const PEI=[], PEJ=[], PEW=[];
+for(const e of E){ const ids=e.pv, n=ids.length, d=e.len/(n-1), g=e.typ===9?0.06:0.04; for(let i=0;i<n-1;i++){ PEI.push(ids[i]); PEJ.push(ids[i+1]); PEW.push(d*g); } }
+const PH=new Float32Array(PNV), PST=new Uint8Array(PNV); // 0 none, 1 provisional, 2 frozen
+const PGRID=new Map(); for(let v=0;v<PNV;v++){ const k=Math.floor(PLON[v]*20)*4096+Math.floor(PLAT[v]*20); let l=PGRID.get(k); if(!l) PGRID.set(k,l=[]); l.push(v); }
+let PROF_READY=true, profBusy=null, profCenter=null;
+function profH(e,sr){ const ids=e.pv; if(!ids) return null; const n=ids.length, sp=e.len/(n-1); let f=sr/sp; if(!(f>0)) f=0; let i=Math.floor(f); if(i>n-2) i=n-2; const u=Math.min(1,f-i); const a=ids[i], b=ids[i+1]; if(!PST[a]||!PST[b]) return null; return PH[a]+(PH[b]-PH[a])*u; }
+function groundAt(e,sr,lon,lat){ if(!REAL) return baseH(lon,lat);
+  if(e.typ===10){ if(e.gs){ const c=e.hc; let lo=0,hi=c.length-1; if(sr<=0) return e.gs[0]; if(sr>=c[hi]) return e.gs[hi]; while(hi-lo>1){ const md=(lo+hi)>>1; if(c[md]<=sr) lo=md; else hi=md; } const u=(sr-c[lo])/((c[hi]-c[lo])||1); return e.gs[lo]+(e.gs[hi]-e.gs[lo])*u; } return realRoadY(lon,lat); }
+  return profH(e,sr); }
+function ensureProfile(lon,lat){ if(profBusy) return profBusy;
+  profBusy=(async()=>{ try{
+    const R=30000, RIN=20000, dLat=R/KY, dLon=R/(111320*Math.cos(lat*D2R));
+    await loadDemBox(11,lon-dLon,lat-dLat,lon+dLon,lat+dLat);
+    const loc=new Int32Array(PNV).fill(-1), vs=[];
+    for(let cx=Math.floor((lon-dLon)*20);cx<=Math.floor((lon+dLon)*20);cx++) for(let cy=Math.floor((lat-dLat)*20);cy<=Math.floor((lat+dLat)*20);cy++){ const l=PGRID.get(cx*4096+cy); if(!l) continue; for(const v of l){ if(segLen(lon,lat,PLON[v],PLAT[v])<=R){ loc[v]=vs.length; vs.push(v); } } }
+    const nv=vs.length; if(!nv) return; const raw=new Float64Array(nv), fixed=new Uint8Array(nv), out=new Float64Array(nv);
+    for(let i=0;i<nv;i++){ const v=vs[i]; let g0=demSample(11,PLON[v],PLAT[v]); if(g0===null||g0<=0.3) g0=12; raw[i]=g0; if(PST[v]===2){ fixed[i]=1; out[i]=PH[v]; } }
+    const EI=[],EJ=[],EW=[]; for(let q=0;q<PEI.length;q++){ const a=loc[PEI[q]], b=loc[PEJ[q]]; if(a>=0&&b>=0){ EI.push(a); EJ.push(b); EW.push(PEW[q]); } }
+    fitProfile(nv,Int32Array.from(EI),Int32Array.from(EJ),Float64Array.from(EW),raw,fixed,out);
+    for(let i=0;i<nv;i++){ const v=vs[i]; if(PST[v]===2) continue; PH[v]=Math.max(1.5,out[i]); PST[v]=segLen(lon,lat,PLON[v],PLAT[v])<=RIN?2:1; }
+    profCenter={lon,lat};
+  }catch(err){ console.warn('profile',err); } finally{ PROF_READY=true; profBusy=null; } })();
+  return profBusy; }
 function roadY(lon,lat){ if(!REAL) return baseH(lon,lat); const v=realRoadY(lon,lat); if(v===null) return lastRoadY; lastRoadY=v; return v; }
-let RD_LON=0,RD_LAT=0;
+let RD_LON=0,RD_LAT=0,RD_E=0,RD_SR=0;
 function roadDistN(lon,lat,cap){ // like roadDist, also records nearest road sample
   const cx=Math.floor(lon*RC),cy=Math.floor(lat*RC); const k=Math.cos(lat*D2R)*111320;
   let best=cap,hw=10; const rr=Math.ceil(cap/360);
   for(let dx=-rr;dx<=rr;dx++)for(let dy=-rr;dy<=rr;dy++){const l=RH.get(rk(cx+dx,cy+dy)); if(!l) continue;
-    for(let i=0;i<l.length;i+=4){ if(!validE(E[l[i+2]])) continue; const ddx=(l[i]-lon)*k, ddy=(l[i+1]-lat)*KY; const d=ddx*ddx+ddy*ddy; if(d<best*best){best=Math.sqrt(d);hw=l[i+3];RD_LON=l[i];RD_LAT=l[i+1];} }}
+    for(let i=0;i<l.length;i+=5){ if(!validE(E[l[i+2]])) continue; const ddx=(l[i]-lon)*k, ddy=(l[i+1]-lat)*KY; const d=ddx*ddx+ddy*ddy; if(d<best*best){best=Math.sqrt(d);hw=l[i+3];RD_LON=l[i];RD_LAT=l[i+1];RD_E=l[i+2];RD_SR=l[i+4];} }}
   return [best,hw]; }
 // photo textures (shared cache, LRU)
 const TEX=new Map();
-function setupTex(t){ t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy()); t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true; return t; }
-function photoTex(z,x,y,hi){ const k=z+'/'+x+'/'+y+(hi?'h':''); let t=TEX.get(k); if(t){t.used=frameNo;return t;}
+function setupTex(t){ t.colorSpace=THREE.SRGBColorSpace; t.anisotropy=Math.min(16,renderer.capabilities.getMaxAnisotropy()); t.wrapS=t.wrapT=THREE.ClampToEdgeWrapping; t.needsUpdate=true; return t; }
+function photoTex(z,x,y,hi){ const k=z+'/'+x+'/'+y+(hi?'h'+hi:''); let t=TEX.get(k); if(t){t.used=frameNo;return t;}
   t={st:0,used:frameNo,k}; TEX.set(k,t); const lon=x2lon(x+.5,z), lat=y2lat(y+.5,z), p=prioOf(lon,lat)+(hi?0:400);
   if(!hi){ loadImg(`${GSI}seamlessphoto/${z}/${x}/${y}.jpg`,p).then(im=>{t.tex=setupTex(new THREE.Texture(im));t.st=1;}).catch(()=>{t.st=2;}); }
-  else { const c=document.createElement('canvas');c.width=c.height=512;const g=c.getContext('2d',{willReadFrequently:true}); g.fillStyle='#55626a'; g.fillRect(0,0,512,512); let n=0;
-    for(let dy=0;dy<2;dy++)for(let dx=0;dx<2;dx++) loadImg(`${GSI}seamlessphoto/${z+1}/${2*x+dx}/${2*y+dy}.jpg`,p).then(im=>g.drawImage(im,dx*256,dy*256)).catch(()=>{}).finally(()=>{ if(++n===4){ t.canvas=c; t.tex=setupTex(new THREE.CanvasTexture(c)); t.st=1; } }); }
+  else { const N=1<<hi, W=256*N; const c=document.createElement('canvas');c.width=c.height=W;const g=c.getContext('2d',{willReadFrequently:true}); g.fillStyle='#55626a'; g.fillRect(0,0,W,W); let n=0;
+    for(let dy=0;dy<N;dy++)for(let dx=0;dx<N;dx++) loadImg(`${GSI}seamlessphoto/${z+hi}/${N*x+dx}/${N*y+dy}.jpg`,p).then(im=>g.drawImage(im,dx*256,dy*256)).catch(()=>{}).finally(()=>{ if(++n===N*N){ t.canvas=c; t.tex=setupTex(new THREE.CanvasTexture(c)); t.st=1; } }); }
   return t; }
 function evictTex(inUse){ if(TEX.size<260) return; const arr=[...TEX.values()].filter(t=>!inUse.has(t.k)&&t.st!==0).sort((a,b)=>a.used-b.used);
   for(const t of arr.slice(0,TEX.size-220)){ if(t.tex) t.tex.dispose(); TEX.delete(t.k);} }
@@ -767,34 +828,36 @@ function terrainGeo(z,x,y,N,carve){
   const pos=new Float32Array((N+1)*(N+1)*3), uv=new Float32Array((N+1)*(N+1)*2); const idx=[];
   for(let j=0;j<=N;j++)for(let i=0;i<=N;i++){
     const lon=x2lon(x+i/N,z), lat=y2lat(y+j/N,z); let h=(demSample(z===FZ?FZ:14,lon,lat)||0)-(z===FZ?6:0);
-    if(carve){ const [d,hw]=roadDistN(lon,lat,hw_cap); if(d<hw_cap){ const ry=realRoadY(RD_LON,RD_LAT); if(ry!==null){ const depth=h-ry;
-      const flat=hw+(depth<=TUN?9:6);
-      if(d<flat){ if(depth>-0.5) h=ry-0.5; }
-      else if(depth<=TUN){ const cut=ry-0.5+(d-flat)*0.9; if(h>cut) h=cut; } } } }
+    if(carve){ const [d,hw]=roadDistN(lon,lat,hw_cap); if(d<hw_cap){ const ry=groundAt(E[RD_E],RD_SR,RD_LON,RD_LAT); if(ry!==null){ const depth=h-ry; const flat=hw+6;
+      if(depth>TUN+6){ /* deep tunnel: the mountain stays */ }
+      else if(d<flat){ if(depth>-6) h=ry-0.5; }
+      else if(depth>0){ const cut=ry-0.5+(d-flat)*0.9; if(h>cut) h=cut; }
+      else if(depth>-6){ const fill=ry-0.5-(d-flat)*0.6; if(h<fill) h=fill; } } } }
     const v=j*(N+1)+i; pos[v*3]=LX(lon); pos[v*3+1]=h; pos[v*3+2]=LZ(lat); uv[v*2]=i/N; uv[v*2+1]=1-j/N;
     if(i<N&&j<N){const a=v,b=v+1,c=v+N+1,d2=v+N+2; idx.push(a,c,b,b,c,d2);}
   }
   const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.BufferAttribute(pos,3)); geo.setAttribute('uv',new THREE.BufferAttribute(uv,2)); geo.setIndex(idx); geo.computeVertexNormals(); return geo; }
 const TUN=14, hw_cap=70;
 function buildRealTile(x,y){
+  if(!MODE_OSM&&!PROF_READY) return null;
   const lon0=x2lon(x,NZ), lon1=x2lon(x+1,NZ), lat0=y2lat(y+1,NZ), lat1=y2lat(y,NZ);
   if(!ensureDem(lon0-0.004,lat0-0.004,lon1+0.004,lat1+0.004)) return null;
   const geo=terrainGeo(NZ,x,y,NEAR_N,true);
   const mat=new THREE.MeshLambertMaterial({color:0x7d8a6a});
-  const m=new THREE.Mesh(geo,mat); m.matrixAutoUpdate=false; const g=new THREE.Group(); g.add(m);
+  const m=new THREE.Mesh(geo,mat); m.matrixAutoUpdate=false; m.receiveShadow=true; const g=new THREE.Group(); g.add(m);
   return {g,m,x,y,tk:null,trees:false,lon:(lon0+lon1)/2,lat:(lat0+lat1)/2};
 }
 function plantTrees(t,tex){
-  const c=tex.canvas; if(!c) return; const g=c.getContext('2d',{willReadFrequently:true}); const d=g.getImageData(0,0,512,512).data;
+  const c=tex.canvas; if(!c) return; const g=c.getContext('2d',{willReadFrequently:true}); const TW=c.width, TS=TW/512; const d=g.getImageData(0,0,TW,TW).data;
   let seed=(t.x*73856093)^(t.y*19349663); const rnd=()=>{seed=(seed*1664525+1013904223)|0;return (seed>>>0)/4294967296;};
   const pts=[];
-  for(let k=0;k<700&&pts.length<260;k++){ const u=rnd(), v=rnd(); const px=Math.floor(u*511), py=Math.floor(v*511); const o=(py*512+px)*4; const r=d[o],gg=d[o+1],b=d[o+2];
+  for(let k=0;k<700&&pts.length<260;k++){ const u=rnd(), v=rnd(); const px=Math.floor(u*(TW-1)), py=Math.floor(v*(TW-1)); const o=(py*TW+px)*4; const r=d[o],gg=d[o+1],b=d[o+2];
     if(!(gg>r*1.12&&gg>b*1.08&&r+gg+b<260&&r+gg+b>60)) continue;
-    let veg=0; for(const [ox,oy] of [[-6,0],[6,0],[0,-6],[0,6]]){ const qx=Math.max(0,Math.min(511,px+ox)), qy=Math.max(0,Math.min(511,py+oy)); const q=(qy*512+qx)*4; if(d[q+1]>d[q]*1.08&&d[q+1]>d[q+2]) veg++; } if(veg<3) continue;
+    let veg=0; for(const [ox,oy] of [[-6,0],[6,0],[0,-6],[0,6]]){ const qx=Math.max(0,Math.min(TW-1,px+ox*TS)), qy=Math.max(0,Math.min(TW-1,py+oy*TS)); const q=(qy*TW+qx)*4; if(d[q+1]>d[q]*1.08&&d[q+1]>d[q+2]) veg++; } if(veg<3) continue;
     const lon=x2lon(t.x+u,NZ), lat=y2lat(t.y+v,NZ); const [dd,hw]=roadDistN(lon,lat,60); if(dd<hw+12) continue;
     const h=demAt(lon,lat); if(h===null||h<=0.3) continue; pts.push([LX(lon),h,LZ(lat),0.55+rnd()*0.7,r,gg,b,rnd()]); }
   if(!pts.length) return;
-  const im=new THREE.InstancedMesh(treeGeo,treeMat,pts.length); const M=new THREE.Matrix4(),Q=new THREE.Quaternion(),S=new THREE.Vector3(),P=new THREE.Vector3(),Y=new THREE.Vector3(0,1,0);
+  const im=shade(new THREE.InstancedMesh(treeGeo,treeMat,pts.length)); const M=new THREE.Matrix4(),Q=new THREE.Quaternion(),S=new THREE.Vector3(),P=new THREE.Vector3(),Y=new THREE.Vector3(0,1,0);
   pts.forEach((p,k)=>{P.set(p[0],p[1]-0.4,p[2]);S.set(p[3],p[3]*(0.8+p[7]*.6),p[3]);Q.setFromAxisAngle(Y,p[7]*6);M.compose(P,Q,S);im.setMatrixAt(k,M);
     im.setColorAt(k,tmpC.setRGB(p[4]/255*0.8,p[5]/255*0.85,p[6]/255*0.8,THREE.SRGBColorSpace));});
   t.g.add(im); }
@@ -811,7 +874,7 @@ function updateRealTiles(budgetMs,syncR=0){
   want.sort((a,b)=>a[2]-b[2]); const keep=new Set();
   for(const [x,y,d2] of want){ const k=x*1e6+y; keep.add(k); let t=rtiles.get(k);
     if(!t){ if(performance.now()-t0>budgetMs && d2>syncR*syncR) continue; t=buildRealTile(x,y); if(!t) continue; terrGroup.add(t.g); rtiles.set(k,t); }
-    const hi=Math.max(Math.abs(x-tx0),Math.abs(y-ty0))<=2; const tex=photoTex(NZ,x,y,hi); inUse.add(tex.k);
+    const ch0=Math.max(Math.abs(x-tx0),Math.abs(y-ty0)); const hi=ch0<=1&&HQ?2:(ch0<=2?1:0); const tex=photoTex(NZ,x,y,hi); inUse.add(tex.k);
     if(tex.st===1 && t.tk!==tex.k){ t.m.material.map=tex.tex; t.m.material.color.set(0xb4b4b4); t.m.material.needsUpdate=true; t.tk=tex.k; if(hi&&!t.trees){ plantTrees(t,tex); t.trees=true; } }
     else if(tex.st!==1 && t.tk){ const lo=TEX.get(NZ+'/'+x+'/'+y); if(lo) inUse.add(lo.k); }
     if(t.tk) inUse.add(t.tk);
@@ -885,7 +948,7 @@ function bvQueue(fn,prio){ BVQ.push({fn,prio}); pumpBV(); }
 function pumpBV(){ BVQ.sort((a,b)=>a.prio-b.prio); while(bvActive<3&&BVQ.length){ const j=BVQ.shift(); bvActive++; j.fn().finally(()=>{bvActive--;pumpBV();}); } }
 
 // window textures (day: faint panes, night: lit panes)
-function winTex(lit){ const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d');
+function winTex(lit){ const c=document.createElement('canvas'); c.width=c.height=256; const g=c.getContext('2d'); g.scale(2,2);
   g.fillStyle=lit?'#000':'#fff'; g.fillRect(0,0,128,128);
   let s=lit?7:3; const rnd=()=>{s=(s*1664525+1013904223)|0;return (s>>>0)/4294967296;};
   for(let j=0;j<4;j++) for(let i=0;i<4;i++){ const x=i*32+9, y=j*32+10;
@@ -925,7 +988,7 @@ function buildBuildings(t,bv){
   }
   if(!idx.length) return;
   const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3)); geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); geo.setIndex(idx); geo.computeVertexNormals();
-  const m=new THREE.Mesh(geo,bldMat); m.matrixAutoUpdate=false; t.g.add(m); t.bldMesh=m;
+  const m=shade(new THREE.Mesh(geo,bldMat)); m.matrixAutoUpdate=false; t.g.add(m); t.bldMesh=m;
 }
 // place-name labels
 const LABEL_CATS=c=> c===422||c===421;
@@ -1016,6 +1079,10 @@ function computeHeights(nodes,edges,inc){
       if(i===0) ids[i]=e.a; else if(i===m) ids[i]=e.b;
       else { while(k<e.cum.length-2&&e.cum[k+1]<sr) k++; const d=e.cum[k+1]-e.cum[k]; const u=d>0?(sr-e.cum[k])/d:0; lonA.push(e.lon[k]+(e.lon[k+1]-e.lon[k])*u); latA.push(e.lat[k]+(e.lat[k+1]-e.lat[k])*u); ids[i]=nv++; } }
     e.hc=hc; e._ids=ids; }
+  const G=new Float64Array(nv);
+  if(REAL){ const raw=new Float64Array(nv); for(let v=0;v<nv;v++){ let g0=demSample(11,lonA[v],latA[v]); if(g0===null||g0<=0.3) g0=3; raw[v]=g0; }
+    const EI=[],EJ=[],EW=[]; for(const e of edges){ const ids=e._ids, hc=e.hc, g=e.link?0.06:0.04; for(let i=0;i<ids.length-1;i++){ EI.push(ids[i]); EJ.push(ids[i+1]); EW.push((hc[i+1]-hc[i])*g); } }
+    fitProfile(nv,Int32Array.from(EI),Int32Array.from(EJ),Float64Array.from(EW),raw,new Uint8Array(nv),G); for(let v=0;v<nv;v++) G[v]=Math.max(1,G[v]); }
   const bOf=e=>e.level>0?BR:(e.level<0?TU:0);
   const h=new Float32Array(nv);
   for(const e of edges){ const b=bOf(e), ids=e._ids; for(let i=1;i<ids.length-1;i++) h[ids[i]]=b; }
@@ -1046,12 +1113,12 @@ function computeHeights(nodes,edges,inc){
     while(H.size){ const [hv,v]=H.pop(); if(hv<h[v]-1e-6) continue; const a=adj[v]; for(let q=0;q<a.length;q+=2){ const c=hv-a[q+1]; if(c>h[a[q]]+1e-4){ h[a[q]]=c; H.push([c,a[q]]); } } } };
   const envDown=()=>{ const H=heap((x,y)=>x[0]-y[0]); for(let v=0;v<nv;v++) if(h[v]<0) H.push([h[v],v]);
     while(H.size){ const [hv,v]=H.pop(); if(hv>h[v]+1e-6) continue; const a=adj[v]; for(let q=0;q<a.length;q+=2){ const c=hv+a[q+1]; if(c<h[a[q]]-1e-4){ h[a[q]]=c; H.push([c,a[q]]); } } } };
-  const enforce=()=>{ for(const c of cons){ const hu=h[c.ua]*(1-c.ut)+h[c.ub]*c.ut, hl=h[c.la]*(1-c.lt)+h[c.lb]*c.lt; const need=hl+c.gap; if(hu<need){ const d=need-hu; h[c.ua]+=d; h[c.ub]+=d; } } };
+  const enforce=()=>{ for(const c of cons){ const hu=(h[c.ua]+G[c.ua])*(1-c.ut)+(h[c.ub]+G[c.ub])*c.ut, hl=(h[c.la]+G[c.la])*(1-c.lt)+(h[c.lb]+G[c.lb])*c.lt; const need=hl+c.gap; if(hu<need){ const d=need-hu; h[c.ua]+=d; h[c.ub]+=d; } } };
   for(let r=0;r<5;r++){ enforce(); envUp(); envDown(); }
   enforce(); envUp();
   // round off the kinks at the top and bottom of each slope
   for(let it=0;it<6;it++){ const h2=Float32Array.from(h); for(let v=0;v<nv;v++){ const a=adj[v]; if(!a.length) continue; let sm=0,n2=0; for(let q=0;q<a.length;q+=2){ sm+=h[a[q]]; n2++; } h2[v]=0.5*h[v]+0.5*sm/n2; } h.set(h2); }
-  for(const e of edges){ e.hs=Float32Array.from(e._ids,v=>h[v]); delete e._ids; }
+  for(const e of edges){ e.hs=Float32Array.from(e._ids,v=>h[v]); e.gs=Float32Array.from(e._ids,v=>G[v]); delete e._ids; }
   window.__heights={crossings:cons.length,vertices:nv};
 }
 function buildOSMNetwork(data){
@@ -1134,8 +1201,8 @@ function buildOSMNetwork(data){
   ADJ.length=0; for(let v=0;v<nodes.length;v++) ADJ.push([]); for(const e of edges) ADJ[e.a].push({e,d:1});
   JOINTS.length=0; for(const j of jlist) JOINTS.push(j);
   EGRID.clear(); for(const e of E){for(let cx=Math.floor(e.bb[0]*20);cx<=Math.floor(e.bb[2]*20);cx++)for(let cy=Math.floor(e.bb[1]*20);cy<=Math.floor(e.bb[3]*20);cy++){const k=gk(cx,cy);let l=EGRID.get(k);if(!l)EGRID.set(k,l=[]);l.push(e);}}
-  RH.clear(); for(const e of E){ const hw=halfWidth(e); const push=(lo,la)=>{const k=rk(Math.floor(lo*RC),Math.floor(la*RC));let l=RH.get(k);if(!l)RH.set(k,l=[]);l.push(lo,la,e.i,hw);};
-    push(e.lon[0],e.lat[0]); for(let k=1;k<e.lon.length;k++){const L=e.cum[k]-e.cum[k-1];const m=Math.max(1,Math.ceil(L/25));for(let t=1;t<=m;t++){const u=t/m;push(e.lon[k-1]+(e.lon[k]-e.lon[k-1])*u,e.lat[k-1]+(e.lat[k]-e.lat[k-1])*u);}} }
+  RH.clear(); for(const e of E){ const hw=halfWidth(e); const push=(lo,la,sr)=>{const k=rk(Math.floor(lo*RC),Math.floor(la*RC));let l=RH.get(k);if(!l)RH.set(k,l=[]);l.push(lo,la,e.i,hw,sr);};
+    push(e.lon[0],e.lat[0],0); for(let k=1;k<e.lon.length;k++){const L=e.cum[k]-e.cum[k-1];const m=Math.max(1,Math.ceil(L/25));for(let t=1;t<=m;t++){const u=t/m;push(e.lon[k-1]+(e.lon[k]-e.lon[k-1])*u,e.lat[k-1]+(e.lat[k]-e.lat[k-1])*u,e.cum[k-1]+L*u);}} }
   return {edges:edges.length,exits:jlist.length};
 }
 // lateral hand-over when passing from one edge to the next (keeps the car in the lane it is physically in)
@@ -1199,7 +1266,7 @@ function rebuildTall(){
     const r0=pos.length/3; for(const v of cont){ pos.push(v.x,y1,v.y); col.push(wr*0.8,wg*0.8,wb*0.8); uv.push(0.05,0.05); } for(const tr of tris) idx.push(r0+tr[0],r0+tr[2],r0+tr[1]);
     if(b.name&&(b.h>=100||b.tower)){ const sp=labelSprite(b.name,999); sp.position.set(LX(cx),y1+18,LZ(cy)); lbl.add(sp); } }
   if(idx.length){ const geo=new THREE.BufferGeometry(); geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3)); geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3)); geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2)); geo.setIndex(idx); geo.computeVertexNormals();
-    const m=new THREE.Mesh(geo,tallMat); m.matrixAutoUpdate=false; tallGroup.add(m); }
+    const m=shade(new THREE.Mesh(geo,tallMat)); m.matrixAutoUpdate=false; tallGroup.add(m); }
   lbl.visible=SHOW_LABELS; tallGroup.add(lbl); tallGroup.userData.lbl=lbl; }
 
 /* ================= graph walking ================= */
@@ -1251,6 +1318,7 @@ function spawn(e,s,dir){
   car.e=e;car.dir=dir;car.s=Math.max(5,Math.min(path(e).len-5,s*path(e).ratio));
   car.lane=outerLane(e); car.latOff=laneOffset(e,car.lane); car.blocked=false; car.pick=null; car.pickNode=-1;
   sampleAt(e,car.s,tmpS); car.lon=tmpS.lon; car.lat=tmpS.lat;
+  if(REAL&&!MODE_OSM&&(profH(e,car.s/(path(e).ratio||1))===null||!profCenter||segLen(car.lon,car.lat,profCenter.lon,profCenter.lat)>8000)){ if(profH(e,car.s/(path(e).ratio||1))===null) PROF_READY=false; ensureProfile(car.lon,car.lat); }
   setOrigin(car.lon,car.lat); clearWorld(); updateRoads(true); updateTiles(0,2); resetTraffic(); lookT=performance.now(); refreshLook(true); if(REAL) updateWhere(true);
 }
 function nearestOnNetwork(lon,lat){
@@ -1271,6 +1339,7 @@ const tailMat=new THREE.MeshBasicMaterial({color:0x5a0a0a});
 const headMat=new THREE.MeshBasicMaterial({color:0x777766});
 const bodies=new THREE.InstancedMesh(bodyGeo,bodyMat,NTR), cabs=new THREE.InstancedMesh(cabGeo,cabMat,NTR);
 const tails=new THREE.InstancedMesh(lightGeo,tailMat,NTR*2), heads=new THREE.InstancedMesh(lightGeo,headMat,NTR*2);
+for(const m of[bodies,cabs]) shade(m);
 for(const m of[bodies,cabs,tails,heads]){m.frustumCulled=false;m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(m);}
 const traffic=[];
 const PAL=['#f4f4f2','#1c1f24','#9ea4aa','#b0262a','#264b8f','#e8e0cc','#3d5a44','#c8c8c8','#f4f4f2','#20242a'];
@@ -1302,7 +1371,7 @@ function stepTraffic(dt){
     const c=laneCfg(t.e); if(MODE_OSM){ const [lo,hi]=laneRange(t.e,t.s/path(t.e).ratio); t.lane=Math.max(lo,Math.min(hi,t.lane)); } else if(t.lane>=c.per) t.lane=c.per-1; const tgt=laneOffset(t.e,t.lane); t.lat+=(tgt-t.lat)*Math.min(1,dt*1.5);
     sampleAt(t.e,t.s,tmpS);
     const hx=tmpS.hx*t.dir, hz=tmpS.hz*t.dir; const lx=hz, lz=-hx;
-    const aLat=t.lat+offAtS(t.e,t.s); const x=LX(tmpS.lon)+lx*aLat, z=LZ(tmpS.lat)+lz*aLat, y=(REAL?(realRoadY(tmpS.lon,tmpS.lat)??lastRoadY):baseH(tmpS.lon,tmpS.lat))+tmpS.lev;
+    const aLat=t.lat+offAtS(t.e,t.s); const gV=groundAt(t.e,t.s/(path(t.e).ratio||1),tmpS.lon,tmpS.lat); const x=LX(tmpS.lon)+lx*aLat, z=LZ(tmpS.lat)+lz*aLat, y=(gV===null?lastRoadY:gV)+tmpS.lev;
     const d=segLen(tmpS.lon,tmpS.lat,car.lon,car.lat);
     if(!ok || d>3000 || !validE(t.e)){ t.alive=false; continue; }
     const yaw=Math.atan2(hx,hz);
@@ -1323,7 +1392,7 @@ function stepTraffic(dt){
 const pcar=new THREE.Group();
 {const b=new THREE.Mesh(bodyGeo,new THREE.MeshLambertMaterial({color:0x0b6b45}));const c=new THREE.Mesh(cabGeo,cabMat);pcar.add(b,c);
  for(const s of[-1,1]){const t=new THREE.Mesh(lightGeo,tailMat);t.position.set(0.62*s,0.95,-2.22);pcar.add(t);}}
-scene.add(pcar);
+pcar.traverse(o=>{ if(o.isMesh) shade(o); }); scene.add(pcar);
 
 
 /* ================= lookahead (signs / branch) ================= */
@@ -1424,7 +1493,7 @@ function updateSky(){
   scene.fog.color.copy(skyU.hor.value); ringMat.color.copy(skyU.hor.value).lerp(skyU.top.value,.35).multiplyScalar(.82);
   hemi.intensity=A.hemi+(B.hemi-A.hemi)*t; hemi.color.copy(skyU.top.value).lerp(new THREE.Color('#ffffff'),.5); hemi.groundColor.set(nightF>.5?'#0c1210':'#4a5a3a');
   sun.intensity=Math.max(0,A.sun+(B.sun-A.sun)*t); sun.color.copy(skyU.sunCol.value).lerp(new THREE.Color('#ffffff'),.4);
-  sun.position.copy(camera.position).addScaledVector(sp.v.y>0?sp.v:new THREE.Vector3(0.3,1,0.2),1000); sun.target.position.copy(camera.position);
+  sun.position.copy(pcar.position).addScaledVector(sp.v.y>0?sp.v:new THREE.Vector3(0.3,1,0.2),700); sun.target.position.copy(pcar.position); sun.castShadow=HQ&&sp.v.y>0.04;
   if(sp.v.y<=0){ sun.intensity=0.12*nightF; sun.color.set('#8ea6ff'); }
   if(REAL){ scene.fog.near=nightF>.5?60:1200; scene.fog.far=34000-30000*nightF; } else { scene.fog.near=nightF>.5?80:300; scene.fog.far=4200-2600*nightF; }
   // night emissives
@@ -1494,7 +1563,7 @@ function toast(msg,ms=2600){elToast.textContent=msg;elToast.hidden=false;toastT=
 
 /* ================= physics step ================= */
 function stepCar(dt){
-  if(REAL && realRoadY(car.lon,car.lat)===null){ holdEl.hidden=false; return; } holdEl.hidden=true;
+  if(REAL && groundAt(car.e,car.s/(path(car.e).ratio||1),car.lon,car.lat)===null){ holdEl.hidden=false; if(!MODE_OSM&&!profBusy) ensureProfile(car.lon,car.lat); return; } holdEl.hidden=true;
   const up=keys.up, dn=keys.down;
   if(up){ car.cruise=false; const a=5.4*(1-Math.pow(Math.min(1,car.v/VMAX),1.3)); car.v+=Math.max(0.35,a)*dt; }
   else if(dn){ car.cruise=false; car.v-=11*dt; }
@@ -1630,6 +1699,7 @@ document.querySelectorAll('#speeds button').forEach(b=>b.addEventListener('click
 document.querySelectorAll('#tmodes button').forEach(b=>b.addEventListener('click',()=>setTimeMode(b.dataset.m)));
 document.querySelectorAll('#traffic button').forEach(b=>b.addEventListener('click',()=>{TRAFFIC_N=+b.dataset.n;renderTraffic();}));
 function renderTraffic(){ document.querySelectorAll('#traffic button').forEach(b=>b.classList.toggle('on',+b.dataset.n===TRAFFIC_N)); }
+document.querySelectorAll('#quality button').forEach(b=>{ b.classList.toggle('on',(b.dataset.q==='hi')===HQ); b.addEventListener('click',()=>{ try{ localStorage.setItem('nhd-quality',b.dataset.q); }catch(err){} location.reload(); }); });
 $('bLabels').addEventListener('click',()=>{SHOW_LABELS=!SHOW_LABELS;$('bLabels').classList.toggle('on',SHOW_LABELS);});
 $('bSound').addEventListener('click',()=>{SND_ON=!SND_ON;$('bSound').classList.toggle('on',SND_ON);$('bSnd').textContent=SND_ON?'音 ON':'音 OFF'; if(SND_ON) initAudio();});
 
@@ -1669,6 +1739,7 @@ async function enterOSM(preset,at){
   panel.hidden=true; holdEl.textContent='OpenStreetMapから車線・ランプ・高架のデータを読み込み中…'; holdEl.hidden=false; const prevMode=MODE_OSM;
   let data; try{ data=await fetchOSM(c.lat-0.085,c.lon-0.105,c.lat+0.085,c.lon+0.105); }
   catch(err){ holdEl.hidden=true; holdEl.textContent='地形・航空写真を読み込み中…'; toast('OpenStreetMapのデータを取得できませんでした。少し時間をおいてもう一度試してください。',5000); return; }
+  if(REAL){ holdEl.textContent='標高データから道路の縦断線形を計算中…'; await loadDemBox(11,c.lon-0.12,c.lat-0.1,c.lon+0.12,c.lat+0.1); }
   const st=buildOSMNetwork(data); MODE_OSM=true; OSM_BB=[c.lon-0.105,c.lat-0.085,c.lon+0.105,c.lat+0.085]; MV.z=0;
   if(!E.length){ holdEl.hidden=true; toast('この周辺には高速道路のデータがありませんでした。',4000); location.reload(); return; }
   let best=null,bd=1e18; const k=Math.cos(c.lat*D2R);
@@ -1695,6 +1766,7 @@ function frame(t){
     if(TIME_MODE==='flow') minutes+=dt*tScale/60;
     stepCar(dt); stepTraffic(dt);
     // rebase origin
+    if(REAL&&!MODE_OSM&&!profBusy&&(!profCenter||segLen(car.lon,car.lat,profCenter.lon,profCenter.lat)>8000)) ensureProfile(car.lon,car.lat);
     if(segLen(car.lon,car.lat,O.lon,O.lat)>40000){ const s=car.s; setOrigin(car.lon,car.lat); clearWorld(); updateRoads(true); updateTiles(0,2); }
     if(t-roadT>(MODE_OSM?120:250)){ roadT=t; updateRoads(false); }
     updateTiles(5);
@@ -1703,11 +1775,11 @@ function frame(t){
   // camera
   sampleAt(car.e,car.s,tmpS); const hx=tmpS.hx*car.dir, hz=tmpS.hz*car.dir; car.hx=hx; car.hz=hz;
   const lx=hz, lz=-hx;
-  const cLat=car.latOff+offAtS(car.e,car.s); const x=LX(tmpS.lon)+lx*cLat, z=LZ(tmpS.lat)+lz*cLat, y=roadY(tmpS.lon,tmpS.lat)+tmpS.lev;
+  const cLat=car.latOff+offAtS(car.e,car.s); const x=LX(tmpS.lon)+lx*cLat, z=LZ(tmpS.lat)+lz*cLat; let gC=groundAt(car.e,car.s/(path(car.e).ratio||1),tmpS.lon,tmpS.lat); if(gC===null) gC=lastRoadY; else lastRoadY=gC; const y=gC+tmpS.lev;
   // look target 28 m ahead along path
   const w={e:car.e,s:car.s,dir:car.dir,latOff:car.latOff}; advance(w,28,opts=>{ if(MODE_OSM){ return osmChooseByLane(opts,w,true); } const node=w.dir>0?w.e.b:w.e.a;return (car.pickNode===node?opts.find(o=>o.e===car.pick):null)||defaultPick(w.e,opts);});
   sampleAt(w.e,w.s,tmpS2); const thx=tmpS2.hx*w.dir, thz=tmpS2.hz*w.dir;
-  const tLat=(MODE_OSM?w.latOff:car.latOff)+offAtS(w.e,w.s); const tx=LX(tmpS2.lon)+thz*tLat, tz=LZ(tmpS2.lat)-thx*tLat, ty=(REAL?(realRoadY(tmpS2.lon,tmpS2.lat)??y):baseH(tmpS2.lon,tmpS2.lat))+tmpS2.lev;
+  const tLat=(MODE_OSM?w.latOff:car.latOff)+offAtS(w.e,w.s); const tx=LX(tmpS2.lon)+thz*tLat, tz=LZ(tmpS2.lat)-thx*tLat; const gT=groundAt(w.e,w.s/(path(w.e).ratio||1),tmpS2.lon,tmpS2.lat); const ty=gT===null?y:gT+tmpS2.lev;
   if(!view.dragging) view.yaw*=Math.pow(0.1,dt);
   let fx=tx-x, fz=tz-z; const fl=Math.hypot(fx,fz)||1; fx/=fl; fz/=fl;
   const cy=Math.cos(view.yaw), sy=Math.sin(view.yaw); const dx=fx*cy+fz*sy, dz=-fx*sy+fz*cy;
@@ -1739,7 +1811,7 @@ function frame(t){
   renderer.render(scene,camera);
 }
 
-window.__nhd={get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork,chunks,camera,scene,renderer,updateRoads,roadGroup,terrGroup,roadY,O,LX,LZ,buildChunk};
+window.__nhd={profH,groundAt,ensureProfile,get PROF_READY(){return PROF_READY},get REAL(){return REAL},N06E,get E(){return E},get car(){return car},get MODE_OSM(){return MODE_OSM},JOINTS,path,offAtS,sampleAt,buildOSMNetwork,chunks,camera,scene,renderer,updateRoads,roadGroup,terrGroup,roadY,O,LX,LZ,buildChunk};
 /* ================= boot ================= */
 (async function boot(){
   const j=JOINTS.find(j=>j.name==='吹田JCT'&&validJ(j));
@@ -1760,7 +1832,8 @@ window.__nhd={get E(){return E},get car(){return car},get MODE_OSM(){return MODE
     document.getElementById('gsiCredit').hidden=false;
     document.getElementById('boot').textContent='航空写真と標高を読み込み中…';
     await waitDemAround(car.lon,car.lat,0.03,20000);
-    spawn(car.e,car.s/path(car.e).ratio,car.dir);
+    document.getElementById('boot').textContent='道路の縦断線形を計算中…';
+    spawn(car.e,car.s/path(car.e).ratio,car.dir); if(profBusy) await profBusy; updateRoads(true);
     const t0=performance.now(); while(rtiles.size<9 && performance.now()-t0<8000){ updateRealTiles(30,2); await new Promise(r=>setTimeout(r,80)); }
   }
   car.v=car.target=90/3.6; car.cruise=true;
